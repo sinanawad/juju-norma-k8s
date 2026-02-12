@@ -95,6 +95,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.fail_action_action, self._on_fail_action)
         self.framework.observe(self.on.get_peer_data_action, self._on_get_peer_data_action)
         self.framework.observe(self.on.get_relation_data_action, self._on_get_relation_data_action)
+        self.framework.observe(self.on.get_cluster_info_action, self._on_get_cluster_info_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -357,6 +358,28 @@ class NormaK8sCharm(ops.CharmBase):
             event.set_results(
                 {"check": check, "result": "fail", "details": f"Unknown check: {check}"}
             )
+
+    def _on_get_cluster_info_action(self, event: ops.ActionEvent) -> None:
+        """Return cluster membership information."""
+        event.log("Retrieving cluster info")
+        peer = self.model.get_relation("norma-peers")
+        all_units = [self.unit.name]
+        if peer:
+            all_units.extend(sorted(u.name for u in peer.units))
+
+        leader_unit = self.unit.name if self.unit.is_leader() else ""
+        if peer and not self.unit.is_leader():
+            leader_unit = peer.data[self.app].get("leader-unit", "")
+
+        event.set_results(
+            {
+                "unit-count": str(len(all_units)),
+                "planned-units": str(self.app.planned_units()),
+                "leader": leader_unit,
+                "is-leader": str(self.unit.is_leader()),
+                "units": json.dumps(all_units),
+            }
+        )
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #

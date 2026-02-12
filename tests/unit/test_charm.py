@@ -862,3 +862,68 @@ class TestRelation:
         assert out_rel.local_unit_data["role"] == "provider"
         out_peer = out.get_relation(peer.id)
         assert out_peer.local_unit_data["unit-name"] == "norma-k8s/0"
+
+
+class TestClusterInfo:
+    """US8: Scaling — cluster membership reporting via get-cluster-info action."""
+
+    def test_single_unit_cluster_info(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        ctx.run(ctx.on.action("get-cluster-info"), state)
+        assert ctx.action_results["unit-count"] == "1"
+        assert ctx.action_results["is-leader"] == "True"
+        assert ctx.action_results["leader"] == "norma-k8s/0"
+        units = json.loads(ctx.action_results["units"])
+        assert units == ["norma-k8s/0"]
+
+    def test_three_unit_cluster_info(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            peers_data={
+                1: {"unit-name": "norma-k8s/1"},
+                2: {"unit-name": "norma-k8s/2"},
+            },
+            local_app_data={"leader-unit": "norma-k8s/0"},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        ctx.run(ctx.on.action("get-cluster-info"), state)
+        assert ctx.action_results["unit-count"] == "3"
+        units = json.loads(ctx.action_results["units"])
+        assert sorted(units) == ["norma-k8s/0", "norma-k8s/1", "norma-k8s/2"]
+
+    def test_non_leader_reports_leader_from_peer_data(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            peers_data={1: {"unit-name": "norma-k8s/1"}},
+            local_app_data={"leader-unit": "norma-k8s/1"},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            relations=[peer],
+            leader=False,
+        )
+        ctx.run(ctx.on.action("get-cluster-info"), state)
+        assert ctx.action_results["is-leader"] == "False"
+        assert ctx.action_results["leader"] == "norma-k8s/1"
+
+    def test_no_peer_relation_single_unit(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("get-cluster-info"), state)
+        assert ctx.action_results["unit-count"] == "1"
+        units = json.loads(ctx.action_results["units"])
+        assert units == ["norma-k8s/0"]
