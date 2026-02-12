@@ -685,14 +685,22 @@ class TestPeerRelation:
     def test_peer_data_idempotent_no_churn(self):
         # Pre-populate peer data with current values — reconcile should not rewrite
         ctx = ops.testing.Context(NormaK8sCharm)
+        existing_secret = ops.testing.Secret(
+            {"password": "pw"}, owner="app", label="calibration-password"
+        )
         peer = ops.testing.PeerRelation(
             endpoint="norma-peers",
             local_unit_data={"unit-name": "norma-k8s/0", "leader": "True"},
-            local_app_data={"cluster-size": "1", "leader-unit": "norma-k8s/0"},
+            local_app_data={
+                "cluster-size": "1",
+                "leader-unit": "norma-k8s/0",
+                "secret-id": existing_secret.id,
+            },
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER, NORMA_SECONDARY],
             relations=[peer],
+            secrets=[existing_secret],
             leader=True,
         )
         out = ctx.run(ctx.on.config_changed(), state)
@@ -702,6 +710,7 @@ class TestPeerRelation:
         assert out_peer.local_app_data == {
             "cluster-size": "1",
             "leader-unit": "norma-k8s/0",
+            "secret-id": existing_secret.id,
         }
 
 
@@ -927,3 +936,185 @@ class TestClusterInfo:
         assert ctx.action_results["unit-count"] == "1"
         units = json.loads(ctx.action_results["units"])
         assert units == ["norma-k8s/0"]
+
+
+class TestSecrets:
+    """US9: Juju Secrets — create, rotate, expire, remove, grant/revoke."""
+
+    def test_leader_creates_secret_on_first_reconcile(self):
+        """AC1: Leader creates app secret and stores ID in peer app data."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.leader_elected(), state)
+        out_peer = out.get_relation(peer.id)
+        assert "secret-id" in out_peer.local_app_data
+        assert out_peer.local_app_data["secret-id"].startswith("secret:")
+
+    def test_secret_not_recreated_if_exists(self):
+        """Secret is only created once — idempotent."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        existing_secret = ops.testing.Secret(
+            {"password": "existing-pw"},
+            owner="app",
+            label="calibration-password",
+        )
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            local_app_data={"secret-id": existing_secret.id},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            secrets=[existing_secret],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        # Secret ID should be unchanged
+        out_peer = out.get_relation(peer.id)
+        assert out_peer.local_app_data["secret-id"] == existing_secret.id
+        # Should still be exactly one secret
+        assert len(out.secrets) == 1
+
+    def test_secret_rotate_creates_new_revision(self):
+        """AC3: secret-rotate creates a new revision with fresh content."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            {"password": "old-password"},
+            owner="app",
+            label="calibration-password",
+            rotate=ops.SecretRotate.MONTHLY,
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            secrets=[secret],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.secret_rotate(secret), state)
+        out_secret = out.get_secret(label="calibration-password")
+        assert out_secret.latest_content["password"] != "old-password"
+
+    def test_secret_expired_removes_revision(self):
+        """AC4: secret-expired removes the expired revision."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            {"password": "current"},
+            latest_content={"password": "latest"},
+            owner="app",
+            label="calibration-password",
+            _tracked_revision=2,
+            _latest_revision=3,
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            secrets=[secret],
+            leader=True,
+        )
+        ctx.run(ctx.on.secret_expired(secret, revision=1), state)
+        assert 1 in ctx.removed_secret_revisions
+
+    def test_secret_remove_cleans_obsolete_revision(self):
+        """AC7: secret-remove removes obsolete revision."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            {"password": "current"},
+            latest_content={"password": "latest"},
+            owner="app",
+            label="calibration-password",
+            _tracked_revision=2,
+            _latest_revision=3,
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            secrets=[secret],
+            leader=True,
+        )
+        ctx.run(ctx.on.secret_remove(secret, revision=1), state)
+        assert 1 in ctx.removed_secret_revisions
+
+    def test_get_secret_info_returns_metadata(self):
+        """AC1: get-secret-info returns secret-id, has-content, rotation."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            {"password": "test-pw"},
+            owner="app",
+            label="calibration-password",
+        )
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            local_app_data={"secret-id": secret.id},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            relations=[peer],
+            secrets=[secret],
+            leader=True,
+        )
+        ctx.run(ctx.on.action("get-secret-info"), state)
+        assert ctx.action_results["secret-id"] == secret.id
+        assert ctx.action_results["has-content"] == "true"
+        assert ctx.action_results["rotation"] == "monthly"
+
+    def test_get_secret_info_no_peer(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("get-secret-info"), state)
+        assert ctx.action_results["secret-id"] == ""
+        assert ctx.action_results["has-content"] == "false"
+
+    def test_secret_granted_to_calibration_provider(self):
+        """AC5: Secret is granted to calibration-provider relations."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            {"password": "test-pw"},
+            owner="app",
+            label="calibration-password",
+        )
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            local_app_data={"secret-id": secret.id},
+        )
+        rel = ops.testing.Relation(endpoint="calibration-provider")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer, rel],
+            secrets=[secret],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.relation_joined(rel), state)
+        out_secret = out.get_secret(label="calibration-password")
+        assert rel.id in out_secret.remote_grants
+
+    def test_revoke_not_undone_by_grant_on_relation_broken(self):
+        """Broken relation is excluded from grant loop after revoke."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            {"password": "test-pw"},
+            owner="app",
+            label="calibration-password",
+            remote_grants={1: {"norma-k8s-remote"}},
+        )
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            local_app_data={"secret-id": secret.id},
+        )
+        broken_rel = ops.testing.Relation(
+            endpoint="calibration-provider",
+            id=1,
+            remote_app_name="norma-k8s-remote",
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer, broken_rel],
+            secrets=[secret],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.relation_broken(broken_rel), state)
+        out_secret = out.get_secret(label="calibration-password")
+        assert broken_rel.id not in out_secret.remote_grants

@@ -12,6 +12,7 @@ import datetime
 import json
 import logging
 import re
+import secrets
 
 import ops
 
@@ -82,6 +83,9 @@ class NormaK8sCharm(ops.CharmBase):
         # --- Dedicated handlers (permitted by constitution) ---
         self.framework.observe(self.on.stop, self._on_stop)
         self.framework.observe(self.on.remove, self._on_remove)
+        self.framework.observe(self.on.secret_rotate, self._on_secret_rotate)
+        self.framework.observe(self.on.secret_expired, self._on_secret_expired)
+        self.framework.observe(self.on.secret_remove, self._on_secret_remove)
 
         # --- Status collection ---
         self.framework.observe(self.on.collect_unit_status, self._on_collect_unit_status)
@@ -96,6 +100,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.get_peer_data_action, self._on_get_peer_data_action)
         self.framework.observe(self.on.get_relation_data_action, self._on_get_relation_data_action)
         self.framework.observe(self.on.get_cluster_info_action, self._on_get_cluster_info_action)
+        self.framework.observe(self.on.get_secret_info_action, self._on_get_secret_info_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -116,8 +121,27 @@ class NormaK8sCharm(ops.CharmBase):
 
         self._log_event(event_name, extra)
 
+        # Identify the broken relation (if any) so grant logic skips it
+        broken_relation: ops.Relation | None = None
+        if (
+            isinstance(event, ops.RelationBrokenEvent)
+            and event.relation.name == "calibration-provider"
+        ):
+            broken_relation = event.relation
+            # Revoke secret access for the broken relation
+            if self.unit.is_leader():
+                peer = self.model.get_relation("norma-peers")
+                if peer:
+                    secret_id = peer.data[self.app].get("secret-id")
+                    if secret_id:
+                        try:
+                            secret = self.model.get_secret(id=secret_id)
+                            secret.revoke(event.relation)
+                        except ops.SecretNotFoundError:
+                            pass
+
         # Update relation data first — independent of workload readiness
-        self._update_relation_data()
+        self._update_relation_data(broken_relation=broken_relation)
 
         # Check primary container connectivity
         container = self.unit.get_container(norma.CONTAINER_NAME)
@@ -185,6 +209,21 @@ class NormaK8sCharm(ops.CharmBase):
 
     def _on_remove(self, event: ops.RemoveEvent) -> None:
         self._log_event("remove")
+
+    def _on_secret_rotate(self, event: ops.SecretRotateEvent) -> None:
+        """Rotate the secret by creating a new revision with fresh content."""
+        self._log_event("secret-rotate", {"secret-label": event.secret.label or ""})
+        event.secret.set_content({"password": secrets.token_urlsafe(24)})
+
+    def _on_secret_expired(self, event: ops.SecretExpiredEvent) -> None:
+        """Handle expired secret revision."""
+        self._log_event("secret-expired", {"secret-label": event.secret.label or ""})
+        event.secret.remove_revision(event.revision)
+
+    def _on_secret_remove(self, event: ops.SecretRemoveEvent) -> None:
+        """Remove obsolete secret revision."""
+        self._log_event("secret-remove", {"secret-label": event.secret.label or ""})
+        event.secret.remove_revision(event.revision)
 
     # ------------------------------------------------------------------ #
     #  Status collection                                                  #
@@ -359,6 +398,34 @@ class NormaK8sCharm(ops.CharmBase):
                 {"check": check, "result": "fail", "details": f"Unknown check: {check}"}
             )
 
+    def _on_get_secret_info_action(self, event: ops.ActionEvent) -> None:
+        """Return info about the app-owned secret."""
+        event.log("Retrieving secret info")
+        peer = self.model.get_relation("norma-peers")
+        if not peer:
+            event.set_results({"secret-id": "", "has-content": "false", "rotation": ""})
+            return
+
+        secret_id = peer.data[self.app].get("secret-id", "")
+        if not secret_id:
+            event.set_results({"secret-id": "", "has-content": "false", "rotation": ""})
+            return
+
+        try:
+            secret = self.model.get_secret(id=secret_id)
+            content = secret.get_content(refresh=True)
+            has_content = bool(content.get("password"))
+        except (ops.SecretNotFoundError, ops.ModelError):
+            has_content = False
+
+        event.set_results(
+            {
+                "secret-id": secret_id,
+                "has-content": str(has_content).lower(),
+                "rotation": "monthly",
+            }
+        )
+
     def _on_get_cluster_info_action(self, event: ops.ActionEvent) -> None:
         """Return cluster membership information."""
         event.log("Retrieving cluster info")
@@ -398,10 +465,14 @@ class NormaK8sCharm(ops.CharmBase):
         norma.write_event_ledger(self._event_ledger)
         logger.info("Event: %s on %s", event_name, self.unit.name)
 
-    def _update_relation_data(self) -> None:
+    def _update_relation_data(self, *, broken_relation: ops.Relation | None = None) -> None:
         """Update peer and calibration relation data (idempotent).
 
         Only writes when values change to avoid relation-changed feedback loops.
+
+        Args:
+            broken_relation: The relation being broken (if any). Grant logic
+                skips this relation to avoid re-granting after a revoke.
         """
         peer = self.model.get_relation("norma-peers")
         if peer:
@@ -417,9 +488,29 @@ class NormaK8sCharm(ops.CharmBase):
                     "cluster-size": str(len(peer.units) + 1),
                     "leader-unit": self.unit.name,
                 }
+                # Create app secret if not yet created
+                if "secret-id" not in peer.data[self.app]:
+                    secret = self.app.add_secret(
+                        {"password": secrets.token_urlsafe(24)},
+                        label="calibration-password",
+                        rotate=ops.SecretRotate.MONTHLY,
+                    )
+                    app_data["secret-id"] = secret.id
                 existing_app = peer.data[self.app]
                 if any(existing_app.get(k) != v for k, v in app_data.items()):
                     existing_app.update(app_data)
+
+        # Grant secret access to calibration-provider relations (skip broken)
+        if peer and self.unit.is_leader():
+            secret_id = peer.data[self.app].get("secret-id")
+            if secret_id:
+                try:
+                    secret = self.model.get_secret(id=secret_id)
+                    for rel in self.model.relations.get("calibration-provider", []):
+                        if rel is not broken_relation:
+                            secret.grant(rel)
+                except ops.SecretNotFoundError:
+                    pass
 
         for endpoint in ("calibration-provider", "calibration-requirer"):
             for rel in self.model.relations.get(endpoint, []):
