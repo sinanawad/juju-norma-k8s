@@ -72,6 +72,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.run_check_action, self._on_run_check_action)
         self.framework.observe(self.on.get_config_action, self._on_get_config_action)
         self.framework.observe(self.on.set_status_action, self._on_set_status_action)
+        self.framework.observe(self.on.fail_action_action, self._on_fail_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -241,6 +242,13 @@ class NormaK8sCharm(ops.CharmBase):
             self._forced_status = status_cls(message)
 
         event.set_results({"previous-status": previous, "new-status": status_name})
+
+    def _on_fail_action(self, event: ops.ActionEvent) -> None:
+        """Intentionally fail to test error reporting."""
+        message = event.params.get("message", "Intentional failure for testing")
+        event.log(f"Failing action with message: {message}")
+        self._log_event("fail-action", {"message": message})
+        event.fail(message)
 
     def _on_run_check_action(self, event: ops.ActionEvent) -> None:
         """Validate a specific charm capability and return pass/fail."""

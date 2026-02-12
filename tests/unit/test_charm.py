@@ -535,3 +535,52 @@ class TestStatusReporting:
         ctx_rec = ops.testing.Context(NormaK8sCharm)
         out = ctx_rec.run(ctx_rec.on.config_changed(), state)
         assert out.unit_status == ops.ActiveStatus()
+
+
+class TestActions:
+    """Verify action infrastructure (US5)."""
+
+    def test_fail_action_with_default_message(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(ctx.on.action("fail-action"), state)
+        assert "Intentional failure for testing" in str(exc_info.value)
+
+    def test_fail_action_with_custom_message(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(ctx.on.action("fail-action", params={"message": "custom error"}), state)
+        assert "custom error" in str(exc_info.value)
+
+    def test_fail_action_recorded_in_event_ledger(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed):
+            ctx.run(ctx.on.action("fail-action"), state)
+
+    def test_action_progress_logging(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("get-event-log"), state)
+        assert any("Retrieving" in log for log in ctx.action_logs)
+
+    def test_get_event_log_returns_structured_results(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("get-event-log"), state)
+        assert "events" in ctx.action_results
+        assert "count" in ctx.action_results
+        assert "unit" in ctx.action_results
+        json.loads(ctx.action_results["events"])
