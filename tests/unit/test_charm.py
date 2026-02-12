@@ -11,6 +11,7 @@ import json
 
 import ops
 import ops.testing
+import pytest
 
 from charm import NormaK8sCharm
 
@@ -406,3 +407,131 @@ class TestConfiguration:
         out = ctx.run(ctx.on.config_changed(), state)
         assert isinstance(out.unit_status, ops.BlockedStatus)
         assert "secret" in out.unit_status.message.lower()
+
+
+class TestStatusReporting:
+    """Verify status reporting (US4)."""
+
+    def test_active_status_when_healthy(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        out = ctx.run(ctx.on.collect_unit_status(), state)
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_waiting_status_when_pebble_disconnected(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        out = ctx.run(ctx.on.collect_unit_status(), state)
+        assert out.unit_status == ops.WaitingStatus("Waiting for Pebble")
+
+    def test_blocked_status_on_invalid_config(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 0},
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert isinstance(out.unit_status, ops.BlockedStatus)
+
+    def test_set_status_forces_blocked(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(
+            ctx.on.action("set-status", params={"status": "blocked", "message": "test"}), state
+        )
+        assert ctx.action_results["new-status"] == "blocked"
+        assert ctx.action_results["previous-status"] == "none"
+
+    def test_set_status_forces_waiting(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(
+            ctx.on.action("set-status", params={"status": "waiting", "message": "hold"}), state
+        )
+        assert ctx.action_results["new-status"] == "waiting"
+
+    def test_set_status_forces_maintenance(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(
+            ctx.on.action("set-status", params={"status": "maintenance", "message": "upgrading"}),
+            state,
+        )
+        assert ctx.action_results["new-status"] == "maintenance"
+
+    def test_set_status_active_clears_forced(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        # Force blocked then clear with active
+        with ctx(ctx.on.action("set-status", params={"status": "active"}), state) as mgr:
+            mgr.charm._forced_status = ops.BlockedStatus("old")
+            mgr.run()
+        assert ctx.action_results["previous-status"] == "BlockedStatus"
+        assert ctx.action_results["new-status"] == "active"
+
+    def test_set_status_unknown_type_fails(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(ctx.on.action("set-status", params={"status": "bogus"}), state)
+        assert "Unknown status type: bogus" in str(exc_info.value)
+
+    def test_blocked_overrides_active_on_config_error(self):
+        # Connected Pebble + invalid config → BlockedStatus (not ActiveStatus)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 0},
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert isinstance(out.unit_status, ops.BlockedStatus)
+
+    def test_app_status_active_on_leader(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.collect_app_status(), state)
+        assert out.app_status == ops.ActiveStatus()
+
+    def test_app_status_blocked_on_leader_with_invalid_config(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 0},
+            leader=True,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert isinstance(out.app_status, ops.BlockedStatus)
+
+    def test_set_status_blocked_then_reconcile_clears(self):
+        # set-status blocked → blocked
+        ctx_set = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx_set.run(
+            ctx_set.on.action("set-status", params={"status": "blocked", "message": "test"}),
+            state,
+        )
+        assert ctx_set.action_results["new-status"] == "blocked"
+
+        # Next reconcile with valid config → active
+        ctx_rec = ops.testing.Context(NormaK8sCharm)
+        out = ctx_rec.run(ctx_rec.on.config_changed(), state)
+        assert out.unit_status == ops.ActiveStatus()

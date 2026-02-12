@@ -71,6 +71,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.get_event_log_action, self._on_get_event_log_action)
         self.framework.observe(self.on.run_check_action, self._on_run_check_action)
         self.framework.observe(self.on.get_config_action, self._on_get_config_action)
+        self.framework.observe(self.on.set_status_action, self._on_set_status_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -216,6 +217,30 @@ class NormaK8sCharm(ops.CharmBase):
                 ),
             }
         )
+
+    def _on_set_status_action(self, event: ops.ActionEvent) -> None:
+        """Force a specific status condition for testing."""
+        event.log("Setting forced status")
+        status_map: dict[str, type[ops.StatusBase]] = {
+            "active": ops.ActiveStatus,
+            "blocked": ops.BlockedStatus,
+            "waiting": ops.WaitingStatus,
+            "maintenance": ops.MaintenanceStatus,
+        }
+        status_name = event.params.get("status", "")
+        message = event.params.get("message", "")
+        status_cls = status_map.get(status_name)
+        if status_cls is None:
+            event.fail(f"Unknown status type: {status_name}")
+            return
+
+        previous = type(self._forced_status).__name__ if self._forced_status else "none"
+        if status_cls is ops.ActiveStatus:
+            self._forced_status = None
+        else:
+            self._forced_status = status_cls(message)
+
+        event.set_results({"previous-status": previous, "new-status": status_name})
 
     def _on_run_check_action(self, event: ops.ActionEvent) -> None:
         """Validate a specific charm capability and return pass/fail."""
