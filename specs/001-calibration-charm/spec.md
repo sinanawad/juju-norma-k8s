@@ -14,6 +14,12 @@
 - Q: Should Juju trust / cloud credential access be tested? → A: Add to US17 (Security) — extend the security story with trust scenarios.
 - Q: What should the calibration workload be? → A: Purpose-built Go binary — single static binary with /health, /version, /ready, /metrics, /toggle-health endpoints; ideal for chiselled ROCK.
 
+### Session 2026-02-11
+
+- Q: Where does the Go binary source code reside? → A: In this repo under a `workload/` directory, built as part of the charm CI.
+- Q: What should the second container run? → A: Same Go binary on a different port — validates multi-container Pebble lifecycle using the same ROCK image.
+- Q: How should the 8 listed edge cases be treated? → A: Keep as-is; resolve during planning phase when task decomposition can assign them to user stories.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Charm Lifecycle Events (Priority: P1)
@@ -192,6 +198,7 @@ bidirectionally via a "get-relation-data" action.
 4. **Given** an active relation, **When** the relation is removed (`juju remove-relation`), **Then** `relation-broken` fires on both sides and relation data is no longer accessible.
 5. **Given** the calibration charm, **When** it is related to itself via a self-relation interface, **Then** the full relation lifecycle works identically.
 6. **Given** a requires endpoint with `limit: 1`, **When** a second integration is attempted, **Then** the integration is rejected.
+7. **Given** an active relation with multiple units, **When** a unit departs, **Then** `event.departing_unit` is set correctly in the `relation-departed` handler, identifying which specific unit is leaving.
 
 ---
 
@@ -322,6 +329,10 @@ verify all operations succeed with expected results.
 5. **Given** a connected container, **When** `container.exec()` runs a failing command, **Then** `ExecError` is raised with the correct return code.
 6. **Given** a connected container, **When** `container.remove_path()` is called, **Then** the file or directory is deleted.
 7. **Given** a connected container, **When** a file is pushed with specific permissions, **Then** the file has the expected ownership and mode.
+8. **Given** a running service, **When** `container.stop("norma")` is called, **Then** the service stops and `container.get_services()` shows it as inactive.
+9. **Given** a stopped service, **When** `container.start("norma")` is called, **Then** the service starts and `container.get_services()` shows it as active.
+10. **Given** a running service, **When** `container.restart("norma")` is called, **Then** the service restarts (PID changes) and remains active.
+11. **Given** a connected container, **When** `container.get_plan()` is called, **Then** it returns the full Pebble plan matching the applied layer.
 
 ---
 
@@ -409,8 +420,8 @@ check.
 
 **Acceptance Scenarios**:
 
-1. **Given** a charm with two containers defined, **When** deployed, **Then** each container fires its own `pebble-ready` event independently.
-2. **Given** two running containers, **When** each has a different Pebble layer, **Then** each container runs its own service with its own environment.
+1. **Given** a charm with two containers defined (both using the same ROCK image, each running the Go binary on a different port), **When** deployed, **Then** each container fires its own `pebble-ready` event independently.
+2. **Given** two running containers, **When** each has a different Pebble layer (different port, service name, and environment), **Then** each container runs its own service independently.
 3. **Given** two running containers, **When** one container's pod is restarted, **Then** only that container's `pebble-ready` fires again.
 4. **Given** two containers, **When** a file is pushed to container A, **Then** it is NOT visible in container B (filesystem isolation).
 
@@ -518,6 +529,33 @@ shows the event was deferred and then re-emitted on the next hook.
 
 ---
 
+### User Story 21 - OCI Resource Lifecycle (Priority: P21)
+
+A CI engineer verifies that the charm handles OCI resource attachment and
+runtime image refresh correctly. When `juju attach-resource` updates the
+container image, the container restarts, `pebble-ready` fires, and the
+charm re-applies its Pebble layer and recovers to active status. This is
+distinct from `juju refresh` (US15), which updates the charm code — OCI
+resource refresh only updates the workload image.
+
+**Why this priority**: OCI resource lifecycle is a K8s-specific Juju
+feature exercised by the `container-resource` test charm in Juju CI. It
+validates that the sidecar pattern handles image swaps gracefully.
+
+**Independent Test**: Deploy the charm, verify active, run
+`juju attach-resource norma-k8s norma-image=<new-image>`, verify
+pebble-ready fires again and charm recovers to active with potentially
+new workload version.
+
+**Acceptance Scenarios**:
+
+1. **Given** a deployed charm, **When** the initial OCI resource is attached, **Then** the container starts and `pebble-ready` fires.
+2. **Given** a running charm, **When** `juju attach-resource` updates the OCI image, **Then** the container restarts, `pebble-ready` fires again, and the charm re-applies its Pebble layer.
+3. **Given** a resource refresh, **When** the charm reconciles, **Then** the workload version may change and is reported correctly via `get-version` action.
+4. **Given** a resource refresh, **When** the event ledger is queried, **Then** it shows a new `pebble-ready` event after the resource attachment.
+
+---
+
 ### Edge Cases
 
 - What happens when `pebble-ready` fires but the container loses connectivity before the layer is applied?
@@ -542,30 +580,32 @@ shows the event was deferred and then re-emitted on the next hook.
 - **FR-007**: The charm MUST declare peer, provides, and requires relation endpoints with a self-relatable interface. All relation endpoints MUST be optional; the charm MUST reach ActiveStatus without any integrations.
 - **FR-008**: The charm MUST create an app-owned Juju secret on leader election and share the secret ID via peer relation data.
 - **FR-009**: The charm MUST declare filesystem storage and persist a data marker to verify survival across restarts.
-- **FR-010**: The charm MUST configure Pebble health checks (HTTP and exec) mapped to K8s liveness and readiness probes.
+- **FR-010**: The charm MUST configure Pebble health checks (HTTP, TCP, and exec) mapped to K8s liveness and readiness probes.
 - **FR-011**: The charm MUST exercise Pebble file operations (push, pull, list, make_dir, remove_path, exists) and command execution.
 - **FR-012**: The charm MUST handle Pebble custom notices with key and data payload.
 - **FR-013**: The charm MUST open its workload port on startup and support closing it via action.
 - **FR-014**: The charm MUST handle `upgrade-charm` events and report its version via both action and `juju status`.
-- **FR-015**: The charm MUST define two workload containers to validate independent Pebble lifecycle.
+- **FR-015**: The charm MUST define two workload containers (both using the same ROCK image, each running the Go binary on a different port) to validate independent Pebble lifecycle.
 - **FR-016**: The charm MUST run as `charm-user: non-root` with non-root container uid/gid. The charm MUST support `juju trust` and report cloud credential availability via action.
 - **FR-017**: The charm MUST provide prometheus_scrape, grafana_dashboard, and loki_push_api relation endpoints.
 - **FR-018**: The charm MUST support cross-model relations via its provides and requires endpoints.
 - **FR-019**: The workload logic MUST reside in a separate module with zero dependency on the ops framework.
 - **FR-020**: The charm MUST handle secret rotation and expiry events by creating new secret revisions and removing obsolete ones.
 - **FR-021**: The charm MUST support arming event deferral via action, recording deferrals and re-emissions in the event ledger, and validating that non-deferrable events cannot be deferred.
+- **FR-022**: The charm MUST handle OCI resource refresh by re-applying Pebble layers and recovering to active status when `juju attach-resource` updates the container image.
+- **FR-023**: The charm MUST exercise Pebble service control operations (stop, start, restart) and plan introspection (get_plan, get_services) in addition to file and exec operations.
 
 ### Key Entities
 
 - **Event Ledger**: An ordered log of all observed Juju events with timestamp, event name, and unit identity. Queryable via action. Reset on pod restart (by design, since it tests event firing, not persistence).
-- **Calibration Workload**: A purpose-built Go binary compiled as a single static executable, running inside a chiselled ROCK container. Exposes `/health`, `/version`, `/ready`, `/metrics` (Prometheus format), and `/toggle-health` endpoints. Health state is toggled via the `/toggle-health` endpoint or a flag file. The binary requires no runtime dependencies.
+- **Calibration Workload**: A purpose-built Go binary compiled as a single static executable, source code co-located in this repo under `workload/`. Runs inside a chiselled ROCK container built via `rockcraft.yaml`. Exposes `/health`, `/version`, `/ready`, `/metrics` (Prometheus format), and `/toggle-health` endpoints. Health state is toggled via the `/toggle-health` endpoint or a flag file. The binary requires no runtime dependencies.
 - **Calibration Config**: The set of all config options (one per type) with validation rules and defaults.
 - **Cluster State**: The charm's view of the deployment: unit count, leader identity, peer data, relation data, secret status, storage status.
 
 ### Assumptions
 
 - The calibration charm is deployed on a Juju 3.6+ controller with a K8s cloud.
-- The OCI image for the workload container is a chiselled ROCK containing a purpose-built Go binary (single static executable, no runtime dependencies), built via rockcraft.
+- The OCI image for the workload container is a chiselled ROCK containing a purpose-built Go binary (single static executable, no runtime dependencies), source in `workload/`, built via rockcraft as part of this repo's CI.
 - Cross-model relation testing requires access to two Juju models on the same controller.
 - COS integration testing requires the Prometheus, Grafana, and Loki charms to be available.
 - The charm name follows the convention `norma-k8s` per the project constitution.
@@ -574,7 +614,7 @@ shows the event was deferred and then re-emitted on the next hook.
 
 ### Measurable Outcomes
 
-- **SC-001**: All 20 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
+- **SC-001**: All 21 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
 - **SC-002**: Each user story can be tested independently by deploying the charm and running specific actions without requiring all other stories to be implemented.
 - **SC-003**: The charm reaches active status within 120 seconds of deployment on a standard MicroK8s cluster.
 - **SC-004**: Scaling from 1 to 3 units completes with all units active within 180 seconds.

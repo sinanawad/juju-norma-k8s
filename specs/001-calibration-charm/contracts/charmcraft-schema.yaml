@@ -1,0 +1,120 @@
+# charmcraft.yaml contract for norma-k8s calibration charm
+# This is the design reference; the actual charmcraft.yaml will be generated
+# during implementation.
+
+type: charm
+name: norma-k8s
+title: Norma Calibration
+summary: Juju K8s calibration charm exercising all charm features
+description: |
+  A comprehensive calibration charm for Juju CI that exercises all features
+  and capabilities relevant to Kubernetes charms. Each feature is testable
+  independently via dedicated actions.
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+parts:
+  norma-charm:
+    plugin: uv
+    source: .
+    build-packages: [git]
+    build-snaps: [astral-uv]
+    override-build: |
+      craftctl default
+      git describe --always > $CRAFT_PART_INSTALL/version
+
+assumes:
+  - juju >= 3.6
+  - k8s-api
+
+containers:
+  norma:
+    resource: norma-image
+    uid: 10000
+    gid: 10000
+    mounts:
+      - storage: data
+        location: /var/lib/norma
+  norma-secondary:
+    resource: norma-image
+    uid: 10000
+    gid: 10000
+
+resources:
+  norma-image:
+    type: oci-image
+    upstream-source: ghcr.io/canonical/norma:latest
+    description: Chiselled ROCK with Go calibration binary
+
+storage:
+  data:
+    type: filesystem
+    minimum-size: 1G
+
+config:
+  options:
+    calibration-string:
+      type: string
+      default: "default"
+      description: "Calibration string config (tests string type handling)"
+    calibration-int:
+      type: int
+      default: 8080
+      description: "Calibration integer config (tests int type, also workload port)"
+    calibration-float:
+      type: float
+      default: 1.0
+      description: "Calibration float config (tests float type handling)"
+    calibration-bool:
+      type: boolean
+      default: true
+      description: "Calibration boolean config (tests boolean type handling)"
+    calibration-secret:
+      type: secret
+      description: "Calibration secret config (tests secret URI resolution)"
+
+# Actions defined in actions-schema.yaml (full list)
+# Actual actions section generated during implementation
+
+peers:
+  norma-peers:
+    interface: norma_peers
+
+provides:
+  calibration-provider:
+    interface: calibration
+    optional: true
+  metrics-endpoint:
+    interface: prometheus_scrape
+    optional: true
+  grafana-dashboard:
+    interface: grafana_dashboard
+    optional: true
+
+requires:
+  calibration-requirer:
+    interface: calibration
+    optional: true
+    limit: 1
+  log-proxy:
+    interface: loki_push_api
+    optional: true
+    limit: 1
+
+charm-libs:
+  - lib: charms.prometheus_k8s.v0.prometheus_scrape
+    version: "0"
+  - lib: charms.grafana_k8s.v0.grafana_dashboard
+    version: "0"
+  - lib: charms.loki_k8s.v0.loki_push_api
+    version: "0"
+
+charm-user: non-root
+
+links:
+  source:
+    - https://github.com/canonical/norma-k8s-operator
+  issues:
+    - https://github.com/canonical/norma-k8s-operator/issues

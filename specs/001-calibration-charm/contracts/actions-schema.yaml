@@ -1,0 +1,148 @@
+# Actions Schema for norma-k8s calibration charm
+# This defines all charm actions, their parameters, and expected results.
+# Maps to the actions section of charmcraft.yaml.
+
+get-event-log:
+  description: "Return the in-memory event ledger"
+  params:
+    limit:
+      type: integer
+      description: "Maximum number of entries to return (0 = all)"
+      default: 0
+    event-filter:
+      type: string
+      description: "Filter by event name substring (empty = no filter)"
+      default: ""
+  # Results: {"events": [...], "count": int, "unit": str}
+
+get-config:
+  description: "Return current effective configuration"
+  # No params
+  # Results: {"calibration-string": str, "calibration-int": int, ...}
+
+set-status:
+  description: "Force a specific status condition for testing"
+  params:
+    status:
+      type: string
+      description: "Status type: active, blocked, waiting, maintenance"
+    message:
+      type: string
+      description: "Status message (empty for ActiveStatus)"
+      default: ""
+  required: [status]
+  # Results: {"previous-status": str, "new-status": str}
+
+get-peer-data:
+  description: "Return peer relation data from all units"
+  # No params
+  # Results: {"app-data": {...}, "unit-data": {"unit/0": {...}, ...}}
+
+get-relation-data:
+  description: "Return relation data for a specific endpoint"
+  params:
+    endpoint:
+      type: string
+      description: "Relation endpoint name"
+    relation-id:
+      type: integer
+      description: "Specific relation ID (optional, returns all if omitted)"
+  required: [endpoint]
+  # Results: {"relations": [{"id": int, "app-data": {...}, "units": {...}}]}
+
+get-cluster-info:
+  description: "Return cluster membership information"
+  # No params
+  # Results: {"unit-count": int, "planned-units": int, "leader": str,
+  #           "is-leader": bool, "units": [str]}
+
+get-secret-info:
+  description: "Return info about the app-owned secret"
+  # No params
+  # Results: {"secret-id": str, "has-content": bool, "rotation": str}
+
+check-storage:
+  description: "Check storage status and data integrity"
+  # No params
+  # Results: {"attached": bool, "mount-point": str, "marker-exists": bool,
+  #           "marker-content": {...}, "writable": bool}
+
+test-pebble-ops:
+  description: "Run full Pebble file/exec operation suite"
+  params:
+    container:
+      type: string
+      description: "Container name (default: norma)"
+      default: "norma"
+  # Results: {"push": "pass/fail", "pull": "pass/fail", "make-dir": "pass/fail",
+  #           "list-files": "pass/fail", "exec": "pass/fail",
+  #           "exec-fail": "pass/fail", "remove-path": "pass/fail",
+  #           "permissions": "pass/fail", "summary": "N/M passed"}
+
+trigger-notice:
+  description: "Send a Pebble custom notice from the workload container"
+  params:
+    key:
+      type: string
+      description: "Notice key (e.g., canonical.com/norma/test)"
+      default: "canonical.com/norma/calibration-test"
+    data:
+      type: string
+      description: "JSON-encoded key-value data payload"
+      default: "{}"
+  # Results: {"notice-sent": true, "key": str}
+
+toggle-health:
+  description: "Toggle the workload health endpoint between healthy/unhealthy"
+  params:
+    container:
+      type: string
+      description: "Container name (default: norma)"
+      default: "norma"
+  # Results: {"previous-state": "healthy/unhealthy",
+  #           "new-state": "healthy/unhealthy"}
+
+test-networking:
+  description: "Report open ports and network binding information"
+  # No params
+  # Results: {"opened-ports": [...], "bindings": {"endpoint": {"ingress": str,
+  #           "bind": str}}}
+
+check-security:
+  description: "Report security posture: UID/GID, trust, credentials"
+  # No params
+  # Results: {"charm-uid": int, "charm-gid": int, "workload-uid": int,
+  #           "workload-gid": int, "trust-available": bool,
+  #           "cloud-type": str, "credential-attrs": [...]}
+
+get-version:
+  description: "Return charm and workload version"
+  # No params
+  # Results: {"charm-version": str, "workload-version": str}
+
+fail-action:
+  description: "Intentionally fail with a given message (tests error reporting)"
+  params:
+    message:
+      type: string
+      description: "Failure message"
+      default: "Intentional failure for testing"
+  # This action always calls event.fail()
+
+test-defer:
+  description: "Arm event deferral for the next eligible event"
+  params:
+    arm:
+      type: boolean
+      description: "true to arm deferral, false to disarm"
+      default: true
+  # Results: {"deferral-armed": bool, "previous-state": bool}
+
+run-check:
+  description: "Validate a specific charm capability and return pass/fail"
+  params:
+    check:
+      type: string
+      description: "Capability to check (e.g., pebble, config, relations, secrets, storage, ports)"
+  required: [check]
+  # Results: {"check": str, "result": "pass/fail", "details": str}
