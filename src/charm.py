@@ -53,6 +53,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.leader_settings_changed, self._reconcile)
         self.framework.observe(self.on.upgrade_charm, self._reconcile)
         self.framework.observe(self.on.update_status, self._reconcile)
+        self.framework.observe(self.on.secret_changed, self._reconcile)
 
         # --- Pebble ready events ---
         self.framework.observe(self.on.norma_pebble_ready, self._reconcile)
@@ -69,6 +70,7 @@ class NormaK8sCharm(ops.CharmBase):
         # --- Actions ---
         self.framework.observe(self.on.get_event_log_action, self._on_get_event_log_action)
         self.framework.observe(self.on.run_check_action, self._on_run_check_action)
+        self.framework.observe(self.on.get_config_action, self._on_get_config_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -91,20 +93,33 @@ class NormaK8sCharm(ops.CharmBase):
             return
 
         # Build and apply Pebble layer
-        port = int(self.config.get("calibration_int", norma.DEFAULT_PORT))
+        port = int(self.config.get("calibration-int", norma.DEFAULT_PORT))
         version = self._get_charm_version()
 
         # Validate config
         config_dict = {
-            "calibration_string": self.config.get("calibration_string", "default"),
+            "calibration_string": self.config.get("calibration-string", "default"),
             "calibration_int": port,
-            "calibration_float": float(self.config.get("calibration_float", 1.0)),
-            "calibration_bool": self.config.get("calibration_bool", True),
+            "calibration_float": float(self.config.get("calibration-float", 1.0)),
+            "calibration_bool": self.config.get("calibration-bool", True),
         }
         valid, error_msg = norma.validate_config(config_dict)
         if not valid:
             self._forced_status = ops.BlockedStatus(error_msg)
             return
+
+        # Resolve secret config if set
+        secret_uri = self.config.get("calibration-secret")
+        if secret_uri:
+            try:
+                secret = self.model.get_secret(id=secret_uri)
+                secret.get_content(refresh=True)
+            except ops.SecretNotFoundError:
+                self._forced_status = ops.BlockedStatus(f"Secret not found: {secret_uri}")
+                return
+            except ops.ModelError as e:
+                self._forced_status = ops.BlockedStatus(f"Secret error: {e}")
+                return
 
         # Apply Pebble layer and replan
         try:
@@ -126,11 +141,8 @@ class NormaK8sCharm(ops.CharmBase):
         # Open workload port
         self.unit.set_ports(ops.Port("tcp", port))
 
-        # Clear forced status on successful reconcile (unless explicitly blocked)
-        if isinstance(self._forced_status, ops.BlockedStatus) and error_msg:
-            pass  # Keep config-validation block
-        elif self._forced_status and not isinstance(self._forced_status, ops.BlockedStatus):
-            self._forced_status = None
+        # Successful reconcile — clear any forced status
+        self._forced_status = None
 
     # ------------------------------------------------------------------ #
     #  Dedicated handlers                                                 #
@@ -187,6 +199,21 @@ class NormaK8sCharm(ops.CharmBase):
                 "events": json.dumps(entries),
                 "count": str(len(entries)),
                 "unit": self.unit.name,
+            }
+        )
+
+    def _on_get_config_action(self, event: ops.ActionEvent) -> None:
+        """Return all current configuration values."""
+        event.log("Retrieving configuration")
+        event.set_results(
+            {
+                "calibration-string": str(self.config.get("calibration-string", "default")),
+                "calibration-int": str(self.config.get("calibration-int", norma.DEFAULT_PORT)),
+                "calibration-float": str(self.config.get("calibration-float", 1.0)),
+                "calibration-bool": str(self.config.get("calibration-bool", True)),
+                "calibration-secret": (
+                    "set" if self.config.get("calibration-secret") else "unset"
+                ),
             }
         )
 

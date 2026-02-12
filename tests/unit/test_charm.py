@@ -278,3 +278,131 @@ class TestPebbleWorkload:
         ctx.run(ctx.on.action("run-check", params={"check": "bogus"}), state)
         assert ctx.action_results["result"] == "fail"
         assert "Unknown" in ctx.action_results["details"]
+
+
+class TestConfiguration:
+    """Verify configuration handling (US3)."""
+
+    def test_valid_config_active_status(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 9090},
+        )
+        out = ctx.run(ctx.on.collect_unit_status(), state)
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_invalid_port_blocked_status(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 0},
+        )
+        # collect_unit_status fires automatically after config-changed
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert isinstance(out.unit_status, ops.BlockedStatus)
+        assert "calibration-int" in out.unit_status.message
+
+    def test_invalid_port_high_blocked_status(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 99999},
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert isinstance(out.unit_status, ops.BlockedStatus)
+
+    def test_recovery_from_blocked_after_valid_config(self):
+        # Invalid config → blocked
+        ctx_bad = ops.testing.Context(NormaK8sCharm)
+        bad_state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 0},
+        )
+        out_bad = ctx_bad.run(ctx_bad.on.config_changed(), bad_state)
+        assert isinstance(out_bad.unit_status, ops.BlockedStatus)
+
+        # Corrected config → active
+        ctx_good = ops.testing.Context(NormaK8sCharm)
+        good_state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 8080},
+        )
+        out_good = ctx_good.run(ctx_good.on.config_changed(), good_state)
+        assert out_good.unit_status == ops.ActiveStatus()
+
+    def test_config_changed_applies_layer_with_custom_port(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 9090},
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        norma_container = out.get_container("norma")
+        layer = norma_container.layers["norma"]
+        assert layer.services["norma"].environment["PORT"] == "9090"
+
+    def test_get_config_action_returns_all_values(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            config={
+                "calibration-string": "hello",
+                "calibration-int": 9090,
+                "calibration-float": 2.5,
+                "calibration-bool": False,
+            },
+        )
+        ctx.run(ctx.on.action("get-config"), state)
+        assert ctx.action_results["calibration-string"] == "hello"
+        assert ctx.action_results["calibration-int"] == "9090"
+        assert ctx.action_results["calibration-float"] == "2.5"
+        assert ctx.action_results["calibration-bool"] == "False"
+        assert ctx.action_results["calibration-secret"] == "unset"
+
+    def test_get_config_action_secret_set(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            owner="app",
+            tracked_content={"password": "s3cret"},
+            label="calibration-password",
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            config={"calibration-secret": secret.id},
+            secrets=[secret],
+        )
+        ctx.run(ctx.on.action("get-config"), state)
+        assert ctx.action_results["calibration-secret"] == "set"
+
+    def test_secret_resolution_success(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secret = ops.testing.Secret(
+            owner="app",
+            tracked_content={"password": "s3cret"},
+            label="calibration-password",
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-secret": secret.id},
+            secrets=[secret],
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        # Should not be blocked — secret resolved successfully
+        norma_container = out.get_container("norma")
+        assert norma_container.layers
+
+    def test_secret_not_found_blocked_status(self, monkeypatch):
+        # Skip consistency checks: Scenario validates secret URIs reference real
+        # secrets, but we're testing the production edge case where a secret is
+        # revoked after being configured.
+        monkeypatch.setenv("SCENARIO_SKIP_CONSISTENCY_CHECKS", "1")
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-secret": "secret:bogus-id"},
+            secrets=[],
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert isinstance(out.unit_status, ops.BlockedStatus)
+        assert "secret" in out.unit_status.message.lower()
