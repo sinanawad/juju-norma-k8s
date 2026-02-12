@@ -60,6 +60,21 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.norma_peers_relation_changed, self._reconcile)
         self.framework.observe(self.on.norma_peers_relation_departed, self._reconcile)
 
+        # --- Calibration relation events → _reconcile ---
+        for evt in (
+            self.on.calibration_provider_relation_created,
+            self.on.calibration_provider_relation_joined,
+            self.on.calibration_provider_relation_changed,
+            self.on.calibration_provider_relation_departed,
+            self.on.calibration_provider_relation_broken,
+            self.on.calibration_requirer_relation_created,
+            self.on.calibration_requirer_relation_joined,
+            self.on.calibration_requirer_relation_changed,
+            self.on.calibration_requirer_relation_departed,
+            self.on.calibration_requirer_relation_broken,
+        ):
+            self.framework.observe(evt, self._reconcile)
+
         # --- Pebble ready events ---
         self.framework.observe(self.on.norma_pebble_ready, self._reconcile)
         self.framework.observe(self.on.norma_secondary_pebble_ready, self._reconcile)
@@ -79,6 +94,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.set_status_action, self._on_set_status_action)
         self.framework.observe(self.on.fail_action_action, self._on_fail_action)
         self.framework.observe(self.on.get_peer_data_action, self._on_get_peer_data_action)
+        self.framework.observe(self.on.get_relation_data_action, self._on_get_relation_data_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -93,7 +109,14 @@ class NormaK8sCharm(ops.CharmBase):
         if getattr(event, "deferred", False):
             extra["re-emitted"] = "true"
 
+        # Capture departing unit identity for relation-departed events
+        if isinstance(event, ops.RelationDepartedEvent) and event.departing_unit:
+            extra["departing-unit"] = event.departing_unit.name
+
         self._log_event(event_name, extra)
+
+        # Update relation data first — independent of workload readiness
+        self._update_relation_data()
 
         # Check primary container connectivity
         container = self.unit.get_container(norma.CONTAINER_NAME)
@@ -148,26 +171,6 @@ class NormaK8sCharm(ops.CharmBase):
 
         # Open workload port
         self.unit.set_ports(ops.Port("tcp", port))
-
-        # Update peer relation data (idempotent — only write when values change
-        # to avoid relation-changed feedback loops between units)
-        peer = self.model.get_relation("norma-peers")
-        if peer:
-            unit_data = {
-                "unit-name": self.unit.name,
-                "leader": str(self.unit.is_leader()),
-            }
-            existing = peer.data[self.unit]
-            if any(existing.get(k) != v for k, v in unit_data.items()):
-                existing.update(unit_data)
-            if self.unit.is_leader():
-                app_data = {
-                    "cluster-size": str(len(peer.units) + 1),
-                    "leader-unit": self.unit.name,
-                }
-                existing_app = peer.data[self.app]
-                if any(existing_app.get(k) != v for k, v in app_data.items()):
-                    existing_app.update(app_data)
 
         # Successful reconcile — clear any forced status
         self._forced_status = None
@@ -276,6 +279,27 @@ class NormaK8sCharm(ops.CharmBase):
         self._log_event("fail-action", {"message": message})
         event.fail(message)
 
+    def _on_get_relation_data_action(self, event: ops.ActionEvent) -> None:
+        """Return relation data for a specific endpoint."""
+        event.log("Retrieving relation data")
+        endpoint = event.params.get("endpoint", "")
+        rel_id_filter = event.params.get("relation-id")
+
+        relations = self.model.relations.get(endpoint, [])
+        if rel_id_filter is not None:
+            relations = [r for r in relations if r.id == rel_id_filter]
+
+        result = []
+        for rel in relations:
+            app_data = dict(rel.data[self.app]) if self.unit.is_leader() else {}
+            units = {}
+            units[self.unit.name] = dict(rel.data[self.unit])
+            for unit in rel.units:
+                units[unit.name] = dict(rel.data[unit])
+            result.append({"id": rel.id, "app-data": app_data, "units": units})
+
+        event.set_results({"relations": json.dumps(result)})
+
     def _on_get_peer_data_action(self, event: ops.ActionEvent) -> None:
         """Return peer relation data from all units."""
         event.log("Retrieving peer relation data")
@@ -350,6 +374,39 @@ class NormaK8sCharm(ops.CharmBase):
         )
         norma.write_event_ledger(self._event_ledger)
         logger.info("Event: %s on %s", event_name, self.unit.name)
+
+    def _update_relation_data(self) -> None:
+        """Update peer and calibration relation data (idempotent).
+
+        Only writes when values change to avoid relation-changed feedback loops.
+        """
+        peer = self.model.get_relation("norma-peers")
+        if peer:
+            unit_data = {
+                "unit-name": self.unit.name,
+                "leader": str(self.unit.is_leader()),
+            }
+            existing = peer.data[self.unit]
+            if any(existing.get(k) != v for k, v in unit_data.items()):
+                existing.update(unit_data)
+            if self.unit.is_leader():
+                app_data = {
+                    "cluster-size": str(len(peer.units) + 1),
+                    "leader-unit": self.unit.name,
+                }
+                existing_app = peer.data[self.app]
+                if any(existing_app.get(k) != v for k, v in app_data.items()):
+                    existing_app.update(app_data)
+
+        for endpoint in ("calibration-provider", "calibration-requirer"):
+            for rel in self.model.relations.get(endpoint, []):
+                cal_data = {
+                    "unit-name": self.unit.name,
+                    "role": endpoint.split("-")[-1],
+                }
+                existing_cal = rel.data[self.unit]
+                if any(existing_cal.get(k) != v for k, v in cal_data.items()):
+                    existing_cal.update(cal_data)
 
     def _get_charm_version(self) -> str:
         """Read charm version from the version file written by charmcraft."""

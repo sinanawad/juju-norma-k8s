@@ -13,6 +13,7 @@ import ops
 import ops.testing
 import pytest
 
+import norma
 from charm import NormaK8sCharm
 
 # Base containers for the charm (both must be defined)
@@ -702,3 +703,162 @@ class TestPeerRelation:
             "cluster-size": "1",
             "leader-unit": "norma-k8s/0",
         }
+
+
+class TestRelation:
+    """US7: Provides/Requires relations and self-relation lifecycle."""
+
+    def test_relation_created_routes_to_reconciler(self):
+        """relation-created fires reconciler — proves data gets written."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(endpoint="calibration-provider")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+        )
+        out = ctx.run(ctx.on.relation_created(rel), state)
+        out_rel = out.get_relation(rel.id)
+        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["role"] == "provider"
+
+    def test_provider_relation_data_written(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(endpoint="calibration-provider")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+        )
+        out = ctx.run(ctx.on.relation_changed(rel), state)
+        out_rel = out.get_relation(rel.id)
+        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["role"] == "provider"
+
+    def test_requirer_relation_data_written(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(endpoint="calibration-requirer")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+        )
+        out = ctx.run(ctx.on.relation_changed(rel), state)
+        out_rel = out.get_relation(rel.id)
+        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["role"] == "requirer"
+
+    def test_self_relation_both_endpoints(self):
+        """Self-relation: same app on both provider and requirer sides."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        provider_rel = ops.testing.Relation(endpoint="calibration-provider")
+        requirer_rel = ops.testing.Relation(endpoint="calibration-requirer")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[provider_rel, requirer_rel],
+        )
+        out = ctx.run(ctx.on.relation_changed(provider_rel), state)
+        out_provider = out.get_relation(provider_rel.id)
+        out_requirer = out.get_relation(requirer_rel.id)
+        # Both sides get data written
+        assert out_provider.local_unit_data["role"] == "provider"
+        assert out_requirer.local_unit_data["role"] == "requirer"
+
+    def test_departing_unit_identity_logged(self):
+        """AC7: departing_unit is logged in relation-departed extra data."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(
+            endpoint="calibration-provider",
+            remote_app_name="norma-k8s-peer",
+            remote_units_data={0: {"unit-name": "norma-k8s-peer/0"}},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+        )
+        ctx.run(ctx.on.relation_departed(rel, remote_unit=0, departing_unit=0), state)
+        ledger = norma.read_event_ledger()
+        departed_entries = [e for e in ledger if e["event_name"] == "relation-departed"]
+        assert len(departed_entries) == 1
+        assert departed_entries[0]["extra"]["departing-unit"] == "norma-k8s-peer/0"
+
+    def test_get_relation_data_action_returns_structure(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(
+            endpoint="calibration-provider",
+            local_unit_data={"unit-name": "norma-k8s/0", "role": "provider"},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+            leader=True,
+        )
+        ctx.run(
+            ctx.on.action("get-relation-data", params={"endpoint": "calibration-provider"}),
+            state,
+        )
+        result = json.loads(ctx.action_results["relations"])
+        assert len(result) == 1
+        assert result[0]["id"] == rel.id
+        assert "norma-k8s/0" in result[0]["units"]
+
+    def test_get_relation_data_action_empty_endpoint(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(
+            ctx.on.action("get-relation-data", params={"endpoint": "calibration-provider"}),
+            state,
+        )
+        result = json.loads(ctx.action_results["relations"])
+        assert result == []
+
+    def test_get_relation_data_action_filters_by_relation_id(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel1 = ops.testing.Relation(endpoint="calibration-provider")
+        rel2 = ops.testing.Relation(endpoint="calibration-provider")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel1, rel2],
+            leader=True,
+        )
+        ctx.run(
+            ctx.on.action(
+                "get-relation-data",
+                params={"endpoint": "calibration-provider", "relation-id": rel1.id},
+            ),
+            state,
+        )
+        result = json.loads(ctx.action_results["relations"])
+        assert len(result) == 1
+        assert result[0]["id"] == rel1.id
+
+    def test_calibration_data_idempotent_no_churn(self):
+        """Pre-populate relation data — reconcile should not rewrite identical values."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(
+            endpoint="calibration-provider",
+            local_unit_data={"unit-name": "norma-k8s/0", "role": "provider"},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        out_rel = out.get_relation(rel.id)
+        assert out_rel.local_unit_data == {"unit-name": "norma-k8s/0", "role": "provider"}
+
+    def test_relation_data_written_when_pebble_disconnected(self):
+        """Relation data updates are independent of workload readiness."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(endpoint="calibration-provider")
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            relations=[rel, peer],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.relation_changed(rel), state)
+        out_rel = out.get_relation(rel.id)
+        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["role"] == "provider"
+        out_peer = out.get_relation(peer.id)
+        assert out_peer.local_unit_data["unit-name"] == "norma-k8s/0"
