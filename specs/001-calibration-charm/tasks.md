@@ -19,10 +19,10 @@
 
 **Purpose**: Create project structure, configure tooling, install dependencies
 
-- [ ] T001 Create project directory structure: `src/`, `src/grafana_dashboards/`, `src/prometheus_alert_rules/`, `tests/`, `tests/unit/`, `tests/integration/`, `workload/`, `lib/charms/`
-- [ ] T002 Initialize Python project with `pyproject.toml` including ops, ops[testing], ruff, coverage[toml], jubilant dependencies and ruff configuration per constitution (line-length 99, Python 3.10 target)
-- [ ] T003 [P] Create `Makefile` with targets: `lint` (ruff check+format), `unit` (pytest tests/unit), `integration` (pytest tests/integration), `clean` (remove build artifacts), `fmt` (ruff format)
-- [ ] T004 [P] Run `uv sync` to generate `uv.lock` and verify dependency resolution
+- [X] T001 Create project directory structure: `src/`, `src/grafana_dashboards/`, `src/prometheus_alert_rules/`, `tests/`, `tests/unit/`, `tests/integration/`, `workload/`, `lib/charms/`
+- [X] T002 Initialize Python project with `pyproject.toml` including ops, ops[testing], ruff, coverage[toml], jubilant dependencies and ruff configuration per constitution (line-length 99, Python 3.10 target)
+- [X] T003 [P] Create `Makefile` with targets: `lint` (ruff check+format), `unit` (pytest tests/unit), `integration` (pytest tests/integration), `clean` (remove build artifacts), `fmt` (ruff format)
+- [X] T004 [P] Run `uv sync` to generate `uv.lock` and verify dependency resolution
 
 ---
 
@@ -32,14 +32,14 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 [P] Implement Go workload binary in `workload/main.go`: HTTP server using Go 1.22+ `net/http.ServeMux` with `GET /health` (200 OK or 500 UNHEALTHY via `sync/atomic.Bool` + `HEALTH_FLAG_FILE` check), `GET /version` (JSON `{"version":"X.Y.Z"}` from ldflags), `GET /ready` (always 200 READY), `GET /metrics` (`promhttp.Handler()` with custom `norma_http_requests_total` CounterVec, `norma_health_toggles_total` Counter, `norma_healthy` Gauge), `POST /toggle-health` (atomic flip, JSON response); support `--port` flag (default from `PORT` env, fallback 8080), `--check` flag (HTTP GET to own `/health`, exit 0/1); per research.md R1
-- [ ] T006 [P] Create `workload/go.mod` with module `github.com/canonical/juju-norma-k8s/workload`, Go 1.22, `prometheus/client_golang v1.21.0` dependency; run `go mod tidy` to generate `workload/go.sum`
-- [ ] T007 [P] Create `rockcraft.yaml` at repo root with `base: bare`, `build-base: ubuntu@24.04`, Go plugin, source `workload/`, build-snaps `go/1.22/stable`, `CGO_ENABLED=0`, build tags `osusergo,netgo`, `run_user: _daemon_`, service `norma` command `/bin/norma` startup enabled, stage only `bin/norma`; per research.md R2
-- [ ] T008 Create `charmcraft.yaml` at repo root from `contracts/charmcraft-schema.yaml`: type charm, name norma-k8s, base ubuntu@24.04, uv plugin part with git describe version, assumes juju>=3.6 and k8s-api, two containers (norma with data storage mount at /var/lib/norma, norma-secondary), norma-image OCI resource, data filesystem storage 1G, 5 config options (calibration-string/int/float/bool/secret), peers norma-peers, provides (calibration-provider, metrics-endpoint, grafana-dashboard), requires (calibration-requirer limit 1, log-proxy limit 1), charm-libs for prometheus_scrape/grafana_dashboard/loki_push_api, charm-user non-root
-- [ ] T009 [P] Implement workload abstraction module `src/norma.py` with zero ops dependency: `build_pebble_layer(container_name, port, version)` returning dict for primary container (service name, override replace, startup enabled, command `/bin/norma`, environment PORT/VERSION, user `_daemon_`), `build_secondary_layer(version)` stub (returns empty — completed in US16), `validate_config(config_dict)` returning `(valid: bool, error_msg: str)` checking string non-empty, port 1-65535, and float >0.0, constants `CONTAINER_NAME="norma"`, `SECONDARY_CONTAINER="norma-secondary"`, `DEFAULT_PORT=8080`, `HEALTH_FLAG_FILE="/tmp/norma-unhealthy"`, `STORAGE_PATH="/var/lib/norma"`, `MARKER_FILE="calibration-marker.json"`
-- [ ] T010 Implement base charm skeleton in `src/charm.py`: `NormaK8sCharm(ops.CharmBase)` with `__init__` that observes all lifecycle events (install, start, stop, remove, config-changed, leader-elected, leader-settings-changed, upgrade-charm, update-status) routed to `_reconcile()`, observes pebble-ready for both containers, observes collect-unit-status and collect-app-status; `_reconcile(event)` method that checks container connectivity and returns early with WaitingStatus if not connected; import constants and builders from `norma` module
-- [ ] T011 [P] Create test infrastructure: `tests/conftest.py` (shared fixtures), `tests/unit/test_norma.py` (tests for `validate_config` valid/invalid cases, `build_pebble_layer` returns correct structure, constants defined), `tests/integration/__init__.py` (empty), `tests/integration/conftest.py` (jubilant fixtures placeholder)
-- [ ] T012 [P] Create initial `tests/unit/test_charm.py` with ops.testing/Scenario setup: import NormaK8sCharm, create Scenario `Context(NormaK8sCharm)`, verify charm instantiates with both containers defined, verify `_reconcile` sets WaitingStatus when container not connected, verify ActiveStatus when primary container connected
+- [X] T005 [P] Implement Go workload binary in `workload/main.go`: HTTP server using Go 1.22+ `net/http.ServeMux` with `GET /health` (200 OK or 500 UNHEALTHY via `sync/atomic.Bool` + `HEALTH_FLAG_FILE` check), `GET /version` (JSON `{"version":"X.Y.Z"}` from ldflags), `GET /ready` (always 200 READY), `GET /metrics` (`promhttp.Handler()` with custom `norma_http_requests_total` CounterVec, `norma_health_toggles_total` Counter, `norma_healthy` Gauge), `POST /toggle-health` (atomic flip, JSON response); support `--port` flag (default from `PORT` env, fallback 8080), `--check` flag (HTTP GET to own `/health`, exit 0/1); per research.md R1
+- [X] T006 [P] Create `workload/go.mod` with module `github.com/canonical/juju-norma-k8s/workload`, Go 1.22, `prometheus/client_golang v1.21.0` dependency; run `go mod tidy` to generate `workload/go.sum`
+- [X] T007 [P] Create `rockcraft.yaml` at repo root with `base: bare`, `build-base: ubuntu@24.04`, Go plugin, source `workload/`, build-snaps `go/1.22/stable`, `CGO_ENABLED=0`, build tags `osusergo,netgo`, `run_user: _daemon_`, service `norma` command `/bin/norma` startup enabled, stage only `bin/norma`; per research.md R2
+- [X] T008 Create `charmcraft.yaml` at repo root from `contracts/charmcraft-schema.yaml`: type charm, name norma-k8s, base ubuntu@24.04, uv plugin part with git describe version, assumes juju>=3.6 and k8s-api, two containers (norma with data storage mount at /var/lib/norma, norma-secondary), norma-image OCI resource, data filesystem storage 1G, 5 config options (calibration-string/int/float/bool/secret), peers norma-peers, provides (calibration-provider, metrics-endpoint, grafana-dashboard), requires (calibration-requirer limit 1, log-proxy limit 1), charm-libs for prometheus_scrape/grafana_dashboard/loki_push_api, charm-user non-root
+- [X] T009 [P] Implement workload abstraction module `src/norma.py` with zero ops dependency: `build_pebble_layer(container_name, port, version)` returning dict for primary container (service name, override replace, startup enabled, command `/bin/norma`, environment PORT/VERSION, user `_daemon_`), `build_secondary_layer(version)` stub (returns empty — completed in US16), `validate_config(config_dict)` returning `(valid: bool, error_msg: str)` checking string non-empty, port 1-65535, and float >0.0, constants `CONTAINER_NAME="norma"`, `SECONDARY_CONTAINER="norma-secondary"`, `DEFAULT_PORT=8080`, `HEALTH_FLAG_FILE="/tmp/norma-unhealthy"`, `STORAGE_PATH="/var/lib/norma"`, `MARKER_FILE="calibration-marker.json"`
+- [X] T010 Implement base charm skeleton in `src/charm.py`: `NormaK8sCharm(ops.CharmBase)` with `__init__` that observes all lifecycle events (install, start, stop, remove, config-changed, leader-elected, leader-settings-changed, upgrade-charm, update-status) routed to `_reconcile()`, observes pebble-ready for both containers, observes collect-unit-status and collect-app-status; `_reconcile(event)` method that checks container connectivity and returns early with WaitingStatus if not connected; import constants and builders from `norma` module
+- [X] T011 [P] Create test infrastructure: `tests/conftest.py` (shared fixtures), `tests/unit/test_norma.py` (tests for `validate_config` valid/invalid cases, `build_pebble_layer` returns correct structure, constants defined), `tests/integration/__init__.py` (empty), `tests/integration/conftest.py` (jubilant fixtures placeholder)
+- [X] T012 [P] Create initial `tests/unit/test_charm.py` with ops.testing/Scenario setup: import NormaK8sCharm, create Scenario `Context(NormaK8sCharm)`, verify charm instantiates with both containers defined, verify `_reconcile` sets WaitingStatus when container not connected, verify ActiveStatus when primary container connected
 
 **Checkpoint**: Foundation ready — all tooling configured, Go workload implemented, base charm skeleton deployed. User story implementation can now begin.
 
@@ -53,9 +53,9 @@
 
 ### Implementation
 
-- [ ] T013 [US1] Add event ledger to `src/charm.py`: define `_event_ledger: list[dict]` in `__init__`, add `_log_event(event_name, extra=None)` helper that appends `{"timestamp": datetime.utcnow().isoformat(), "event_name": event_name, "unit_name": self.unit.name, "extra": extra or {}}`, call `_log_event` at the start of `_reconcile()` using `type(event).__name__` converted to kebab-case, and in all other observed handlers (stop, remove)
-- [ ] T014 [US1] Add `get-event-log` action to `charmcraft.yaml` actions section (params: limit integer default 0, event-filter string default "") and implement `_on_get_event_log_action` handler in `src/charm.py`: observe the action event, filter ledger by event-filter substring if set, apply limit if >0, set action results with `events` (JSON list), `count` (int), `unit` (self.unit.name)
-- [ ] T015 [US1] Add lifecycle event unit tests in `tests/unit/test_charm.py`: verify event ledger records install event via Scenario `run("install", state)`, verify config-changed appends to ledger, verify get-event-log action returns correct entries with filtering, verify event-filter param works
+- [X] T013 [US1] Add event ledger to `src/charm.py`: define `_event_ledger: list[dict]` in `__init__`, add `_log_event(event_name, extra=None)` helper that appends `{"timestamp": datetime.utcnow().isoformat(), "event_name": event_name, "unit_name": self.unit.name, "extra": extra or {}}`, call `_log_event` at the start of `_reconcile()` using `type(event).__name__` converted to kebab-case, and in all other observed handlers (stop, remove)
+- [X] T014 [US1] Add `get-event-log` action to `charmcraft.yaml` actions section (params: limit integer default 0, event-filter string default "") and implement `_on_get_event_log_action` handler in `src/charm.py`: observe the action event, filter ledger by event-filter substring if set, apply limit if >0, set action results with `events` (JSON list), `count` (int), `unit` (self.unit.name)
+- [X] T015 [US1] Add lifecycle event unit tests in `tests/unit/test_charm.py`: verify event ledger records install event via Scenario `run("install", state)`, verify config-changed appends to ledger, verify get-event-log action returns correct entries with filtering, verify event-filter param works
 
 **Checkpoint**: US1 complete — charm logs and reports all lifecycle events
 
@@ -69,9 +69,9 @@
 
 ### Implementation
 
-- [ ] T016 [US2] Enhance `_reconcile()` in `src/charm.py`: after connectivity check, build Pebble layer via `norma.build_pebble_layer()` with config port and version, call `container.add_layer("norma", layer, combine=True)` and `container.replan()`, query workload `/version` endpoint via `container.exec()` and call `self.unit.set_workload_version()`; wrap in try/except `ConnectionError` → WaitingStatus
-- [ ] T017 [US2] Add `run-check` action to `charmcraft.yaml` actions section (params: check string required) and implement `_on_run_check_action` handler in `src/charm.py`: for `check=pebble` verify service running via `container.get_service("norma").is_running()` and plan matches expected layer, return `{"check": "pebble", "result": "pass/fail", "details": str}`
-- [ ] T018 [US2] Add Pebble unit tests in `tests/unit/test_charm.py`: verify layer applied on pebble-ready event via Scenario with Container, verify replan triggered on config-changed, verify WaitingStatus when container not connected, verify run-check pebble action returns pass when service running
+- [X] T016 [US2] Enhance `_reconcile()` in `src/charm.py`: after connectivity check, build Pebble layer via `norma.build_pebble_layer()` with config port and version, call `container.add_layer("norma", layer, combine=True)` and `container.replan()`, query workload `/version` endpoint via `container.exec()` and call `self.unit.set_workload_version()`; wrap in try/except `ConnectionError` → WaitingStatus
+- [X] T017 [US2] Add `run-check` action to `charmcraft.yaml` actions section (params: check string required) and implement `_on_run_check_action` handler in `src/charm.py`: for `check=pebble` verify service running via `container.get_service("norma").is_running()` and plan matches expected layer, return `{"check": "pebble", "result": "pass/fail", "details": str}`
+- [X] T018 [US2] Add Pebble unit tests in `tests/unit/test_charm.py`: verify layer applied on pebble-ready event via Scenario with Container, verify replan triggered on config-changed, verify WaitingStatus when container not connected, verify run-check pebble action returns pass when service running
 
 **Checkpoint**: US2 complete — workload managed via Pebble with proper lifecycle
 
@@ -85,7 +85,7 @@
 
 ### Implementation
 
-- [ ] T019 [US3] Enhance `_reconcile()` in `src/charm.py`: call `norma.validate_config()` with current config dict, if invalid set `self._forced_status = ops.BlockedStatus(error_msg)` and return early; pass validated config values to Pebble layer environment via updated `build_pebble_layer()` call
+- [X] T019 [US3] Enhance `_reconcile()` in `src/charm.py`: call `norma.validate_config()` with current config dict, if invalid set `self._forced_status = ops.BlockedStatus(error_msg)` and return early; pass validated config values to Pebble layer environment via updated `build_pebble_layer()` call
 - [ ] T020 [US3] Add secret config resolution in `_reconcile()` in `src/charm.py`: if `self.config.get("calibration_secret")` is set, resolve via `self.model.get_secret(id=secret_uri)` and call `secret.get_content(refresh=True)`, handle `SecretNotFoundError` with BlockedStatus; observe `secret-changed` event routed to `_reconcile` per research.md R4
 - [ ] T021 [US3] Add `get-config` action to `charmcraft.yaml` actions section and implement `_on_get_config_action` handler in `src/charm.py`: return all current config values as action results (`calibration-string`, `calibration-int`, `calibration-float`, `calibration-bool`, `calibration-secret` as "set"/"unset" without exposing content)
 - [ ] T022 [US3] Add configuration unit tests in `tests/unit/test_charm.py`: verify valid config → ActiveStatus with Scenario config, verify invalid port (0 or 99999) → BlockedStatus, verify config-changed triggers Pebble replan, verify get-config action returns all values, verify secret config resolution with mock secret
@@ -102,7 +102,7 @@
 
 ### Implementation
 
-- [ ] T023 [US4] Implement `_on_collect_unit_status` in `src/charm.py`: check `_forced_status` instance variable first, then check config validation (BlockedStatus), then check Pebble connectivity (WaitingStatus "Waiting for Pebble"), otherwise `event.add_status(ops.ActiveStatus())`; implement `_on_collect_app_status` on leader: aggregate from `_forced_status` if set
+- [X] T023 [US4] Implement `_on_collect_unit_status` in `src/charm.py`: check `_forced_status` instance variable first, then check config validation (BlockedStatus), then check Pebble connectivity (WaitingStatus "Waiting for Pebble"), otherwise `event.add_status(ops.ActiveStatus())`; implement `_on_collect_app_status` on leader: aggregate from `_forced_status` if set
 - [ ] T024 [US4] Add `set-status` action to `charmcraft.yaml` actions section (params: status string required, message string default "") and implement `_on_set_status_action` handler in `src/charm.py`: map status string to ops status class (active/blocked/waiting/maintenance), store in `_forced_status`, return previous-status and new-status; clear forced status on next successful reconcile if status="active"
 - [ ] T025 [US4] Add status unit tests in `tests/unit/test_charm.py`: verify ActiveStatus when healthy via Scenario collect-unit-status, verify BlockedStatus on invalid config, verify WaitingStatus when Pebble disconnected, verify set-status action forces BlockedStatus, verify status priority (forced blocked overrides waiting)
 
@@ -214,7 +214,7 @@
 
 ### Implementation
 
-- [ ] T044 [US11] Add health check definitions to Pebble layer in `src/norma.py` `build_pebble_layer()`: add `checks` dict with `health` (HTTP `http://localhost:{port}/health`, level `ready`, period `10s`, threshold 3), `alive` (exec `["/bin/norma", "--check"]`, level `alive`, period `30s`), and `tcp-alive` (TCP port `{port}`, level `alive`, period `30s`)
+- [X] T044 [US11] Add health check definitions to Pebble layer in `src/norma.py` `build_pebble_layer()`: add `checks` dict with `health` (HTTP `http://localhost:{port}/health`, level `ready`, period `10s`, threshold 3), `alive` (exec `["/bin/norma", "--check"]`, level `alive`, period `30s`), and `tcp-alive` (TCP port `{port}`, level `alive`, period `30s`)
 - [ ] T045 [US11] Add `pebble-check-failed` and `pebble-check-recovered` event handlers in `src/charm.py` `__init__`: observe for norma container, log to event ledger with check name as extra `{"check": event.info.name}`, on check-failed optionally update status
 - [ ] T046 [US11] Add `toggle-health` action to `charmcraft.yaml` actions section (params: container string default "norma") and implement `_on_toggle_health_action` handler in `src/charm.py`: check if flag file exists via `container.exists(HEALTH_FLAG_FILE)`, if exists remove via `container.remove_path()` (→ healthy), if not exists create via `container.push(HEALTH_FLAG_FILE, "unhealthy")` (→ unhealthy); return `{"previous-state": str, "new-state": str}`
 - [ ] T047 [US11] Add health check unit tests in `tests/unit/test_charm.py`: verify all three checks (HTTP, exec, TCP) present in Pebble layer from `build_pebble_layer()`, verify check-failed event logged to ledger, verify toggle-health action creates flag file when healthy and removes when unhealthy
@@ -262,7 +262,7 @@
 
 ### Implementation
 
-- [ ] T053 [US14] Add port management in `_reconcile()` in `src/charm.py`: after Pebble layer applied, call `self.unit.set_ports(ops.Port("tcp", config_port))` to declare the workload port
+- [X] T053 [US14] Add port management in `_reconcile()` in `src/charm.py`: after Pebble layer applied, call `self.unit.set_ports(ops.Port("tcp", config_port))` to declare the workload port
 - [ ] T054 [US14] Add `test-networking` action to `charmcraft.yaml` actions section and implement `_on_test_networking_action` handler in `src/charm.py`: return `opened-ports` (list from `self.unit.opened_ports()`), `bindings` (dict mapping key endpoints like "norma-peers", "calibration-provider" to their ingress/bind addresses via `self.model.get_binding(endpoint).network`)
 - [ ] T055 [US14] Add networking unit tests in `tests/unit/test_charm.py`: verify `set_ports` called in reconcile with correct port, verify test-networking action returns port and binding data
 
@@ -294,7 +294,7 @@
 
 ### Implementation
 
-- [ ] T059 [US16] Complete `build_secondary_layer(version)` in `src/norma.py`: service `norma-secondary`, override replace, startup enabled, command `/bin/norma`, environment `PORT=8081` and `VERSION`, user `_daemon_`, health check `health-secondary` HTTP on `http://localhost:8081/health` level ready period 10s threshold 3
+- [X] T059 [US16] Complete `build_secondary_layer(version)` in `src/norma.py`: service `norma-secondary`, override replace, startup enabled, command `/bin/norma`, environment `PORT=8081` and `VERSION`, user `_daemon_`, health check `health-secondary` HTTP on `http://localhost:8081/health` level ready period 10s threshold 3
 - [ ] T060 [US16] Add secondary container pebble-ready handling in `src/charm.py`: in the already-observed `norma-secondary` pebble-ready handler within `_reconcile()`, apply secondary layer from `norma.build_secondary_layer()`, call secondary container `replan()`, handle independently from primary (check each container's connectivity separately)
 - [ ] T061 [US16] Add multi-container unit tests in `tests/unit/test_charm.py`: verify independent pebble-ready events for each container in Scenario, verify different layers applied (different service names, different ports), verify secondary container gets port 8081
 

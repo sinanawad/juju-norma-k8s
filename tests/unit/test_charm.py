@@ -158,3 +158,123 @@ class TestGetEventLogAction:
         ctx.run(ctx.on.action("get-event-log", params={"limit": 1}), state)
         events = json.loads(ctx.action_results["events"])
         assert len(events) <= 1
+
+
+class TestPebbleWorkload:
+    """Verify Pebble workload management (US2)."""
+
+    def test_layer_applied_on_pebble_ready(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        out = ctx.run(ctx.on.pebble_ready(NORMA_CONTAINER), state)
+        norma_container = out.get_container("norma")
+        assert norma_container.layers
+        layer = norma_container.layers["norma"]
+        assert "norma" in layer.services
+        assert layer.services["norma"].command == "/bin/norma"
+
+    def test_layer_applied_on_config_changed(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        norma_container = out.get_container("norma")
+        assert norma_container.layers
+        layer = norma_container.layers["norma"]
+        assert "norma" in layer.services
+
+    def test_waiting_status_when_pebble_not_connected(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        out = ctx.run(ctx.on.collect_unit_status(), state)
+        assert out.unit_status == ops.WaitingStatus("Waiting for Pebble")
+
+    def test_run_check_pebble_pass(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_with_service = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            layers={
+                "norma": ops.pebble.Layer(
+                    {
+                        "services": {
+                            "norma": {
+                                "override": "replace",
+                                "command": "/bin/norma",
+                                "startup": "enabled",
+                            }
+                        }
+                    }
+                )
+            },
+            service_statuses={"norma": ops.pebble.ServiceStatus.ACTIVE},
+        )
+        state = ops.testing.State(
+            containers=[norma_with_service, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("run-check", params={"check": "pebble"}), state)
+        assert ctx.action_results["check"] == "pebble"
+        assert ctx.action_results["result"] == "pass"
+
+    def test_run_check_pebble_service_not_running(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_stopped = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            layers={
+                "norma": ops.pebble.Layer(
+                    {
+                        "services": {
+                            "norma": {
+                                "override": "replace",
+                                "command": "/bin/norma",
+                                "startup": "enabled",
+                            }
+                        }
+                    }
+                )
+            },
+            service_statuses={"norma": ops.pebble.ServiceStatus.INACTIVE},
+        )
+        state = ops.testing.State(
+            containers=[norma_stopped, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("run-check", params={"check": "pebble"}), state)
+        assert ctx.action_results["result"] == "fail"
+        assert "not running" in ctx.action_results["details"].lower()
+
+    def test_run_check_pebble_service_not_found(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_no_service = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_no_service, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("run-check", params={"check": "pebble"}), state)
+        assert ctx.action_results["result"] == "fail"
+        assert "not found" in ctx.action_results["details"].lower()
+
+    def test_run_check_pebble_fail_disconnected(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("run-check", params={"check": "pebble"}), state)
+        assert ctx.action_results["result"] == "fail"
+        assert "not connected" in ctx.action_results["details"].lower()
+
+    def test_run_check_unknown(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("run-check", params={"check": "bogus"}), state)
+        assert ctx.action_results["result"] == "fail"
+        assert "Unknown" in ctx.action_results["details"]

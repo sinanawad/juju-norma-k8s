@@ -68,6 +68,7 @@ class NormaK8sCharm(ops.CharmBase):
 
         # --- Actions ---
         self.framework.observe(self.on.get_event_log_action, self._on_get_event_log_action)
+        self.framework.observe(self.on.run_check_action, self._on_run_check_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -188,6 +189,41 @@ class NormaK8sCharm(ops.CharmBase):
                 "unit": self.unit.name,
             }
         )
+
+    def _on_run_check_action(self, event: ops.ActionEvent) -> None:
+        """Validate a specific charm capability and return pass/fail."""
+        event.log("Running capability check")
+        check = event.params.get("check", "")
+
+        if check == "pebble":
+            container = self.unit.get_container(norma.CONTAINER_NAME)
+            if not container.can_connect():
+                event.set_results(
+                    {"check": "pebble", "result": "fail", "details": "Container not connected"}
+                )
+                return
+            try:
+                svc = container.get_service(norma.CONTAINER_NAME)
+                if svc.is_running():
+                    event.set_results(
+                        {"check": "pebble", "result": "pass", "details": "Service running"}
+                    )
+                else:
+                    event.set_results(
+                        {"check": "pebble", "result": "fail", "details": "Service not running"}
+                    )
+            except ops.pebble.ConnectionError:
+                event.set_results(
+                    {"check": "pebble", "result": "fail", "details": "Connection lost"}
+                )
+            except (ops.ModelError, ops.pebble.APIError):
+                event.set_results(
+                    {"check": "pebble", "result": "fail", "details": "Service not found"}
+                )
+        else:
+            event.set_results(
+                {"check": check, "result": "fail", "details": f"Unknown check: {check}"}
+            )
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #
