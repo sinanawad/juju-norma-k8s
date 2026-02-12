@@ -1,0 +1,41 @@
+# Copyright 2026 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+name: norma
+base: bare
+build-base: ubuntu@24.04
+version: "0.1.0"
+summary: Chiselled ROCK with Go calibration binary
+description: |
+  Minimal OCI image for the norma-k8s calibration charm workload.
+  Contains only the statically compiled Norma Go binary and Pebble.
+  Built with CGO_ENABLED=0 for a fully static, distroless image.
+license: Apache-2.0
+
+platforms:
+  amd64:
+
+run_user: _daemon_
+
+services:
+  norma:
+    override: replace
+    command: /bin/norma
+    startup: enabled
+
+parts:
+  norma:
+    plugin: go
+    source: workload/
+    build-snaps:
+      - go/1.22/stable
+    build-environment:
+      - CGO_ENABLED: "0"
+      - GOFLAGS: "-trimpath"
+    go-buildtags:
+      - osusergo
+      - netgo
+    override-build: |
+      go build -o ${CRAFT_PART_INSTALL}/bin/norma -tags "osusergo,netgo" -ldflags="-s -w -X main.version=0.1.0" ./...
+    stage:
+      - bin/norma

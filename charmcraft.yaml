@@ -1,0 +1,206 @@
+type: charm
+name: norma-k8s
+title: Norma Calibration
+summary: Juju K8s calibration charm exercising all charm features
+description: |
+  A comprehensive calibration charm for Juju CI that exercises all features
+  and capabilities relevant to Kubernetes charms. Each feature is testable
+  independently via dedicated actions.
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+parts:
+  norma-charm:
+    plugin: uv
+    source: .
+    build-packages: [git]
+    build-snaps: [astral-uv]
+    override-build: |
+      craftctl default
+      git describe --always > $CRAFT_PART_INSTALL/version
+
+assumes:
+  - juju >= 3.6
+  - k8s-api
+
+containers:
+  norma:
+    resource: juju-norma-image
+    uid: 584792
+    gid: 584792
+    mounts:
+      - storage: data
+        location: /var/lib/norma
+  norma-secondary:
+    resource: juju-norma-image
+    uid: 584792
+    gid: 584792
+
+resources:
+  juju-norma-image:
+    type: oci-image
+    upstream-source: localhost:32000/norma:0.1.0
+    description: Chiselled ROCK with Go calibration binary
+
+storage:
+  data:
+    type: filesystem
+    minimum-size: 1G
+
+config:
+  options:
+    calibration-string:
+      type: string
+      default: "default"
+      description: Calibration string config (tests string type handling)
+    calibration-int:
+      type: int
+      default: 8080
+      description: Calibration integer config (tests int type, also workload port)
+    calibration-float:
+      type: float
+      default: 1.0
+      description: Calibration float config (tests float type handling)
+    calibration-bool:
+      type: boolean
+      default: true
+      description: Calibration boolean config (tests boolean type handling)
+    calibration-secret:
+      type: secret
+      description: Calibration secret config (tests secret URI resolution)
+
+actions:
+  get-event-log:
+    description: Return the in-memory event ledger
+    params:
+      limit:
+        type: integer
+        description: Maximum number of entries to return (0 = all)
+        default: 0
+      event-filter:
+        type: string
+        description: Filter by event name substring (empty = no filter)
+        default: ""
+  get-config:
+    description: Return current effective configuration
+  set-status:
+    description: Force a specific status condition for testing
+    params:
+      status:
+        type: string
+        description: "Status type: active, blocked, waiting, maintenance"
+      message:
+        type: string
+        description: Status message (empty for ActiveStatus)
+        default: ""
+    required: [status]
+  get-peer-data:
+    description: Return peer relation data from all units
+  get-relation-data:
+    description: Return relation data for a specific endpoint
+    params:
+      endpoint:
+        type: string
+        description: Relation endpoint name
+      relation-id:
+        type: integer
+        description: Specific relation ID (optional, returns all if omitted)
+    required: [endpoint]
+  get-cluster-info:
+    description: Return cluster membership information
+  get-secret-info:
+    description: Return info about the app-owned secret
+  check-storage:
+    description: Check storage status and data integrity
+  test-pebble-ops:
+    description: Run full Pebble file/exec/service operation suite
+    params:
+      container:
+        type: string
+        description: Container name
+        default: norma
+  trigger-notice:
+    description: Send a Pebble custom notice from the workload container
+    params:
+      key:
+        type: string
+        description: Notice key
+        default: canonical.com/norma/calibration-test
+      data:
+        type: string
+        description: JSON-encoded key-value data payload
+        default: "{}"
+  toggle-health:
+    description: Toggle the workload health endpoint between healthy/unhealthy
+    params:
+      container:
+        type: string
+        description: Container name
+        default: norma
+  test-networking:
+    description: Report open ports and network binding information
+  check-security:
+    description: "Report security posture: UID/GID, trust, credentials"
+  get-version:
+    description: Return charm and workload version
+  fail-action:
+    description: Intentionally fail with a given message (tests error reporting)
+    params:
+      message:
+        type: string
+        description: Failure message
+        default: Intentional failure for testing
+  test-defer:
+    description: Arm event deferral for the next eligible event
+    params:
+      arm:
+        type: boolean
+        description: true to arm deferral, false to disarm
+        default: true
+  run-check:
+    description: Validate a specific charm capability and return pass/fail
+    params:
+      check:
+        type: string
+        description: "Capability to check (e.g., pebble, config, relations)"
+    required: [check]
+
+peers:
+  norma-peers:
+    interface: norma_peers
+
+provides:
+  calibration-provider:
+    interface: calibration
+    optional: true
+  metrics-endpoint:
+    interface: prometheus_scrape
+    optional: true
+  grafana-dashboard:
+    interface: grafana_dashboard
+    optional: true
+
+requires:
+  calibration-requirer:
+    interface: calibration
+    optional: true
+    limit: 1
+  log-proxy:
+    interface: loki_push_api
+    optional: true
+    limit: 1
+
+# charm-libs deferred to US14/US15 (COS integration):
+#  - lib: prometheus_k8s.v0.prometheus_scrape
+#  - lib: grafana_k8s.v0.grafana_dashboard
+#  - lib: loki_k8s.v0.loki_push_api
+
+charm-user: non-root
+
+links:
+  source:
+    - https://github.com/canonical/norma-k8s-operator
+  issues:
+    - https://github.com/canonical/norma-k8s-operator/issues

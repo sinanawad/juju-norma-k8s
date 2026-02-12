@@ -81,6 +81,8 @@ These are **hard rules** — never introduce them:
 
 **Integration tests** (`jubilant`): Real deployments using `jubilant.temp_model()`. Synchronous API. Run with `CHARM_PATH=<path> make integration`.
 
+**CLI Acceptance (Constitution VIII)**: Every user story MUST be verified against a live Juju deployment via CLI (`juju run`, `juju config`, `juju status`, etc.) before it is considered done. Unit tests alone are insufficient — they cannot catch bugs that only manifest across event dispatches.
+
 ## State Management
 
 No `StoredState`. When state is needed, prefer in order:
@@ -128,6 +130,8 @@ GitHub Actions with `canonical/charming-actions`. PR workflow: lint → unit →
 ## Active Technologies
 - Python 3.10+ (charm), Go 1.22+ (workload binary) + `ops` (charm framework), `ops[testing]` (unit tests), (001-calibration-charm)
 - Juju filesystem storage (PersistentVolume), peer relation data (001-calibration-charm)
+- Python 3.12 (ubuntu@24.04 base, `requires-python = ">=3.12"`) + ops 3.5.2, standard library `json` for serialization (002-charm-introspection)
+- N/A (read-only action, no new storage) (002-charm-introspection)
 
 ## Recent Changes
 - 001-calibration-charm: Added Python 3.10+ (charm), Go 1.22+ (workload binary) + `ops` (charm framework), `ops[testing]` (unit tests),

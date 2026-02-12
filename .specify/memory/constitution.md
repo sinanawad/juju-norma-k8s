@@ -1,21 +1,17 @@
 <!--
   Sync Impact Report
   ===================
-  Version change: N/A (initial) -> 1.0.0
-  Modified principles: N/A (initial creation)
+  Version change: 1.0.0 -> 1.1.0
+  Modified principles: None
   Added sections:
-    - Core Principles (7 principles)
-    - Technology Stack & Tooling
-    - Development Workflow & CI/CD
-    - Governance
-  Removed sections: N/A
+    - Principle VIII: CLI Acceptance Verification
+  Removed sections: None
   Templates requiring updates:
-    - .specify/templates/plan-template.md ✅ reviewed (no changes needed;
-      Constitution Check section is dynamically filled from this file)
-    - .specify/templates/spec-template.md ✅ reviewed (no changes needed;
-      user stories and requirements are generic)
+    - .specify/templates/plan-template.md ✅ reviewed (Constitution Check
+      section dynamically filled; new principle auto-included)
+    - .specify/templates/spec-template.md ✅ reviewed (no changes needed)
     - .specify/templates/tasks-template.md ✅ reviewed (no changes needed;
-      phase structure is compatible with charm development)
+      CLI verification is a workflow gate, not a task template change)
     - .specify/templates/agent-file-template.md ✅ reviewed (no changes needed)
   Follow-up TODOs: None
 -->
@@ -166,6 +162,31 @@ The following anti-patterns are PROHIBITED:
 where events may arrive in any order and may repeat. Idempotency and
 simplicity are the only reliable strategies.
 
+### VIII. CLI Acceptance Verification
+
+Every user story MUST be verified against a live Juju deployment using
+the Juju CLI before it is considered complete. Unit tests alone are
+insufficient — they execute within a single charm instance lifetime
+and cannot catch bugs that manifest across event dispatches (e.g.,
+state not persisting between events, actions returning stale data).
+
+Acceptance workflow for each user story:
+
+1. Unit tests pass (`make unit`)
+2. Charm is deployed to a test model (`juju deploy`)
+3. The user story is exercised via CLI commands (`juju run`,
+   `juju config`, `juju status`, `juju relate`, etc.)
+4. CLI output is verified against the acceptance criteria in the spec
+
+A user story that passes unit tests but fails CLI verification is
+**not done** — the implementation MUST be fixed before proceeding.
+
+**Rationale**: This charm exists as a calibration standard for Juju CI.
+If a feature cannot be verified through the same CLI that CI uses, it
+provides no value. The event ledger bug (in-memory list that resets on
+every dispatch) proved that unit tests can pass while the feature is
+completely non-functional in production.
+
 ## Technology Stack & Tooling
 
 **Language**: Python 3.10+ with the `ops` framework (CharmBase)
@@ -283,4 +304,4 @@ with these principles.
 - Use CLAUDE.md for runtime development guidance that supplements
   (but never contradicts) this constitution
 
-**Version**: 1.0.0 | **Ratified**: 2026-02-10 | **Last Amended**: 2026-02-10
+**Version**: 1.1.0 | **Ratified**: 2026-02-10 | **Last Amended**: 2026-02-12
