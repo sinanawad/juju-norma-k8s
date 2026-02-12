@@ -55,6 +55,11 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.update_status, self._reconcile)
         self.framework.observe(self.on.secret_changed, self._reconcile)
 
+        # --- Peer relation events → _reconcile ---
+        self.framework.observe(self.on.norma_peers_relation_joined, self._reconcile)
+        self.framework.observe(self.on.norma_peers_relation_changed, self._reconcile)
+        self.framework.observe(self.on.norma_peers_relation_departed, self._reconcile)
+
         # --- Pebble ready events ---
         self.framework.observe(self.on.norma_pebble_ready, self._reconcile)
         self.framework.observe(self.on.norma_secondary_pebble_ready, self._reconcile)
@@ -73,6 +78,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.get_config_action, self._on_get_config_action)
         self.framework.observe(self.on.set_status_action, self._on_set_status_action)
         self.framework.observe(self.on.fail_action_action, self._on_fail_action)
+        self.framework.observe(self.on.get_peer_data_action, self._on_get_peer_data_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -142,6 +148,26 @@ class NormaK8sCharm(ops.CharmBase):
 
         # Open workload port
         self.unit.set_ports(ops.Port("tcp", port))
+
+        # Update peer relation data (idempotent — only write when values change
+        # to avoid relation-changed feedback loops between units)
+        peer = self.model.get_relation("norma-peers")
+        if peer:
+            unit_data = {
+                "unit-name": self.unit.name,
+                "leader": str(self.unit.is_leader()),
+            }
+            existing = peer.data[self.unit]
+            if any(existing.get(k) != v for k, v in unit_data.items()):
+                existing.update(unit_data)
+            if self.unit.is_leader():
+                app_data = {
+                    "cluster-size": str(len(peer.units) + 1),
+                    "leader-unit": self.unit.name,
+                }
+                existing_app = peer.data[self.app]
+                if any(existing_app.get(k) != v for k, v in app_data.items()):
+                    existing_app.update(app_data)
 
         # Successful reconcile — clear any forced status
         self._forced_status = None
@@ -249,6 +275,29 @@ class NormaK8sCharm(ops.CharmBase):
         event.log(f"Failing action with message: {message}")
         self._log_event("fail-action", {"message": message})
         event.fail(message)
+
+    def _on_get_peer_data_action(self, event: ops.ActionEvent) -> None:
+        """Return peer relation data from all units."""
+        event.log("Retrieving peer relation data")
+        peer = self.model.get_relation("norma-peers")
+        if not peer:
+            event.set_results({"app-data": "{}", "unit-data": "{}"})
+            return
+
+        app_data = dict(peer.data[self.app])
+        unit_data = {}
+        # Include own unit data
+        unit_data[self.unit.name] = dict(peer.data[self.unit])
+        # Include remote peer units
+        for unit in peer.units:
+            unit_data[unit.name] = dict(peer.data[unit])
+
+        event.set_results(
+            {
+                "app-data": json.dumps(app_data),
+                "unit-data": json.dumps(unit_data),
+            }
+        )
 
     def _on_run_check_action(self, event: ops.ActionEvent) -> None:
         """Validate a specific charm capability and return pass/fail."""

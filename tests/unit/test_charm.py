@@ -584,3 +584,121 @@ class TestActions:
         assert "count" in ctx.action_results
         assert "unit" in ctx.action_results
         json.loads(ctx.action_results["events"])
+
+
+class TestPeerRelation:
+    """Verify peer relations and leadership (US6)."""
+
+    def test_unit_data_written_on_reconcile(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        out_peer = out.get_relation(peer.id)
+        local_unit_data = out_peer.local_unit_data
+        assert local_unit_data["unit-name"] == "norma-k8s/0"
+        assert local_unit_data["leader"] == "True"
+
+    def test_leader_writes_app_data(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        out_peer = out.get_relation(peer.id)
+        app_data = out_peer.local_app_data
+        assert app_data["leader-unit"] == "norma-k8s/0"
+        assert app_data["cluster-size"] == "1"
+
+    def test_non_leader_does_not_write_app_data(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            leader=False,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        out_peer = out.get_relation(peer.id)
+        assert "leader-unit" not in out_peer.local_app_data
+
+    def test_non_leader_unit_data_leader_false(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            leader=False,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        out_peer = out.get_relation(peer.id)
+        assert out_peer.local_unit_data["leader"] == "False"
+
+    def test_get_peer_data_action_returns_structure(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        ctx.run(ctx.on.action("get-peer-data"), state)
+        assert "app-data" in ctx.action_results
+        assert "unit-data" in ctx.action_results
+        app_data = json.loads(ctx.action_results["app-data"])
+        unit_data = json.loads(ctx.action_results["unit-data"])
+        assert isinstance(app_data, dict)
+        assert isinstance(unit_data, dict)
+
+    def test_get_peer_data_no_relation(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("get-peer-data"), state)
+        assert ctx.action_results["app-data"] == "{}"
+        assert ctx.action_results["unit-data"] == "{}"
+
+    def test_cluster_size_reflects_peer_count(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            peers_data={1: {"unit-name": "norma-k8s/1"}},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        out_peer = out.get_relation(peer.id)
+        assert out_peer.local_app_data["cluster-size"] == "2"
+
+    def test_peer_data_idempotent_no_churn(self):
+        # Pre-populate peer data with current values — reconcile should not rewrite
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            local_unit_data={"unit-name": "norma-k8s/0", "leader": "True"},
+            local_app_data={"cluster-size": "1", "leader-unit": "norma-k8s/0"},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        out_peer = out.get_relation(peer.id)
+        # Data should be identical — no new keys, no changed values
+        assert out_peer.local_unit_data == {"unit-name": "norma-k8s/0", "leader": "True"}
+        assert out_peer.local_app_data == {
+            "cluster-size": "1",
+            "leader-unit": "norma-k8s/0",
+        }
