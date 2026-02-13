@@ -25,8 +25,8 @@ the charm suitable as a CI validation suite for Juju itself.
 **Performance Goals**: Active in <120s, scale 1→3 in <180s, actions <30s
 **Constraints**: Non-root execution, chiselled ROCK, no StoredState, no
 event.defer() for control flow
-**Scale/Scope**: 22 user stories, 18 actions, 2 containers, 7+ relation
-endpoints, 5 config options (one per type)
+**Scale/Scope**: 22 user stories, 17 actions (+1 introspect in US22), 2 containers,
+7+ relation endpoints, 5 config options (one per type)
 
 ## Constitution Check
 
@@ -37,10 +37,11 @@ endpoints, 5 config options (one per type)
 | I | Holistic Reconciler Architecture | PASS | All lifecycle events route to `_reconcile()`. Action handlers are dedicated (permitted). |
 | II | Workload Abstraction | PASS | `src/norma.py` has zero ops dependency. Pebble layers, port definitions, config construction all in workload module. |
 | III | Stateless by Default | PASS | No StoredState. Event ledger is ephemeral in-memory (resets on pod restart by design). Peer relation data for persistent state. Secret IDs stored in peer data. |
-| IV | Security-First | PASS | `charm-user: non-root`, container uid/gid 10000, Juju secrets for password, chiselled ROCK, no sensitive data in logs. |
+| IV | Security-First | PASS | `charm-user: non-root`, container uid/gid 584792 (`_daemon_`), Juju secrets for password, chiselled ROCK, no sensitive data in logs. |
 | V | Observable by Design | PASS | US18 provides prometheus_scrape, grafana_dashboard, loki_push_api. Workload `/metrics` endpoint in Prometheus format. Alert rules shipped. |
 | VI | Three-Tier Testing | PASS | Unit: ops.testing for charm + plain pytest for norma.py. Integration: jubilant. Lint: ruff. No Harness, no pytest-operator, no flake8. |
 | VII | Simplicity & Idempotency | PASS with EXCEPTION | All handlers idempotent. `collect_unit_status` for status. Exception: US20 deliberately tests `event.defer()` to validate Juju's deferral mechanism — see Complexity Tracking. |
+| VIII | CLI Acceptance Verification | PASS | Every user story is CLI-verified against a live Juju deployment before being marked complete. Acceptance workflow: unit tests → deploy → CLI exercise → verify against spec ACs. |
 
 **Gate result: PASS** (1 justified exception documented below)
 

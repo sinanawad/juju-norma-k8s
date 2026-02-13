@@ -401,7 +401,7 @@ upgrade-charm and config-changed fire, verify the new version is reported.
 1. **Given** a running charm, **When** `juju refresh` is executed with a new charm revision, **Then** `upgrade-charm` fires before `config-changed`.
 2. **Given** an upgrade in progress, **When** `upgrade-charm` fires, **Then** the charm reconciles its workload to the new version.
 3. **Given** a completed upgrade, **When** `juju status` is queried, **Then** the application version reflects the new charm version.
-4. **Given** an upgrade from a version that stored data in a legacy format, **When** the new version starts, **Then** data is migrated gracefully.
+4. **Given** a completed upgrade, **When** the get-version action is run, **Then** the charm-version and workload-version both reflect the new revision.
 
 ---
 
@@ -448,7 +448,7 @@ availability.
 **Acceptance Scenarios**:
 
 1. **Given** `charm-user: non-root` in charmcraft.yaml, **When** the charm is deployed, **Then** the charm process runs as a non-root user.
-2. **Given** `uid: 10000` and `gid: 10000` on a container, **When** the workload starts, **Then** the Pebble process and service run as UID 10000.
+2. **Given** a container configured with non-root uid/gid (584792 for `_daemon_`), **When** the workload starts, **Then** the Pebble process and service run as a non-root user.
 3. **Given** a non-root charm, **When** all standard operations are performed (config, relations, actions, status), **Then** they succeed without permission errors.
 4. **Given** the charm is deployed with `juju deploy --trust`, **When** the check-security action queries cloud credentials, **Then** the cloud type, endpoint, and credential attributes are accessible.
 5. **Given** the charm is deployed without `--trust`, **When** `juju trust <app>` is executed post-deploy, **Then** `config-changed` fires and cloud credentials become available.
@@ -473,7 +473,7 @@ scrapes metrics, Grafana receives the dashboard, and Loki receives logs.
 
 1. **Given** a `prometheus_scrape` relation, **When** integrated with Prometheus, **Then** metrics are scraped from the charm's metrics endpoint.
 2. **Given** a `grafana_dashboard` relation, **When** integrated with Grafana, **Then** the shipped JSON dashboard appears in Grafana.
-3. **Given** a `loki_push_api` relation, **When** integrated with Loki, **Then** workload logs are forwarded and visible in Loki.
+3. **Given** a `loki_push_api` relation, **When** integrated with Loki, **Then** the `LogProxyConsumer` library configures Pebble log forwarding and workload logs are visible in Loki.
 4. **Given** shipped Prometheus alert rules, **When** the relation is active, **Then** alert rules are loaded into Prometheus.
 
 ---
@@ -586,20 +586,20 @@ the returned report contains all expected sections with accurate data.
 
 ### Edge Cases
 
-- What happens when `pebble-ready` fires but the container loses connectivity before the layer is applied?
-- What happens when the leader unit is removed while it is in the middle of writing to the peer relation app data bag?
-- What happens when two config-changed events fire in rapid succession with different values?
-- What happens when a secret rotation event fires but the leader unit is not available?
-- What happens when storage is detached while the workload is writing to it?
-- What happens when a relation-broken event fires for a relation that was never fully established (no relation-changed received)?
-- What happens when an upgrade-charm event fires while the workload is unhealthy?
-- What happens when scale-down removes more units than the cluster can tolerate?
+- What happens when `pebble-ready` fires but the container loses connectivity before the layer is applied? *(Covered by US2: `_reconcile()` wraps Pebble ops in `try/except ConnectionError`; next pebble-ready retries.)*
+- What happens when the leader unit is removed while it is in the middle of writing to the peer relation app data bag? *(Covered by US6/US8: Juju ensures atomic writes; new leader re-populates app data on `leader-elected`.)*
+- What happens when two config-changed events fire in rapid succession with different values? *(Covered by US3: Holistic reconciler reads current config on each invocation; intermediate values are irrelevant.)*
+- What happens when a secret rotation event fires but the leader unit is not available? *(Covered by US9: `secret-rotate` fires only on the secret owner (leader); if leader is down, Juju queues the event.)*
+- What happens when storage is detached while the workload is writing to it? *(Covered by US10: `storage-detaching` fires before removal; concurrent writes may get ENOENT, handled by `try/except PathError`.)*
+- What happens when a relation-broken event fires for a relation that was never fully established (no relation-changed received)? *(Covered by US7: `_reconcile()` checks current relation state, not event history; relation data may be empty but handler is idempotent.)*
+- What happens when an upgrade-charm event fires while the workload is unhealthy? *(Covered by US15/US11: Reconciler re-applies Pebble layer regardless of health state; health checks recover independently.)*
+- What happens when scale-down removes more units than the cluster can tolerate? *(Covered by US8: `planned_units()` returns target count; remaining units update peer data; no minimum quorum enforced.)*
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The charm MUST log every observed event (name, timestamp, unit) to an in-memory event ledger queryable via action.
+- **FR-001**: The charm MUST log every observed event (name, timestamp, unit) to an ephemeral event ledger persisted to the charm container filesystem (resets on pod restart) and queryable via action.
 - **FR-002**: The charm MUST manage a workload process via Pebble with a purpose-built Go binary that exposes `/health`, `/version`, `/ready`, `/metrics`, and `/toggle-health` HTTP endpoints inside a chiselled ROCK container.
 - **FR-003**: The charm MUST declare config options of every supported type: string, int, float, boolean, and secret.
 - **FR-004**: The charm MUST validate configuration and enter BlockedStatus with a descriptive message for invalid values.
@@ -626,7 +626,7 @@ the returned report contains all expected sections with accurate data.
 
 ### Key Entities
 
-- **Event Ledger**: An ordered log of all observed Juju events with timestamp, event name, and unit identity. Queryable via action. Reset on pod restart (by design, since it tests event firing, not persistence).
+- **Event Ledger**: An ordered log of all observed Juju events with timestamp, event name, and unit identity. Persisted to the charm container filesystem to survive across event dispatches; resets on pod restart (by design, since it tests event firing, not long-term persistence). Queryable via action.
 - **Calibration Workload**: A purpose-built Go binary compiled as a single static executable, source code co-located in this repo under `workload/`. Runs inside a chiselled ROCK container built via `rockcraft.yaml`. Exposes `/health`, `/version`, `/ready`, `/metrics` (Prometheus format), and `/toggle-health` endpoints. Health state is toggled via the `/toggle-health` endpoint or a flag file. The binary requires no runtime dependencies.
 - **Calibration Config**: The set of all config options (one per type) with validation rules and defaults.
 - **Cluster State**: The charm's view of the deployment: unit count, leader identity, peer data, relation data, secret status, storage status.

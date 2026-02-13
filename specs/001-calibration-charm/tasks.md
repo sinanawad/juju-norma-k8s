@@ -5,7 +5,7 @@
 
 **Tests**: Included per constitution Principle VI (Three-Tier Testing) and SC-007.
 
-**Organization**: Tasks grouped by user story for independent implementation. 21 user stories from spec.md, organized in priority order (P1-P21).
+**Organization**: Tasks grouped by user story for independent implementation. 22 user stories from spec.md, organized in priority order (P1-P22).
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -246,7 +246,7 @@
 
 ### Implementation
 
-- [ ] T050 [US13] Add `pebble-custom-notice` event handler for norma container in `src/charm.py` `__init__`: observe the event, in handler extract `event.notice.key` and `event.notice.last_data`, log to event ledger with extra `{"notice-key": key, "notice-data": str(data)}`
+- [ ] T050 [US13] Add `pebble-custom-notice` event handler for norma container in `src/charm.py` `__init__`: observe the event, in handler extract `event.notice.key`, log to event ledger with extra `{"notice-key": key}` (notice payload omitted — may contain secrets)
 - [ ] T051 [US13] Add `trigger-notice` action to `charmcraft.yaml` actions section (params: key string default "canonical.com/norma/calibration-test", data string default "{}") and implement `_on_trigger_notice_action` handler in `src/charm.py`: execute `container.exec(["pebble", "notify", key, ...data_args])` inside the norma container, return `{"notice-sent": true, "key": key}`
 - [ ] T052 [US13] Add notice unit tests in `tests/unit/test_charm.py`: verify pebble-custom-notice handler logs event with key, verify trigger-notice action calls container.exec with correct pebble notify command
 
