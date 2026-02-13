@@ -1423,6 +1423,110 @@ class TestNotices:
         assert "JSON object" in str(exc_info.value)
 
 
+class TestNetworking:
+    """US14: Networking & Ports — port management and test-networking action."""
+
+    def test_set_ports_called_on_reconcile(self):
+        """Reconcile opens the configured port."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config={"calibration-int": 9090},
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert ops.testing.TCPPort(9090) in out.opened_ports
+
+    def test_default_port_opened(self):
+        """Default port 8080 is opened when no config override."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert ops.testing.TCPPort(8080) in out.opened_ports
+
+    def test_test_networking_returns_ports(self):
+        """test-networking action reports opened ports."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            opened_ports=[ops.testing.TCPPort(8080)],
+        )
+        ctx.run(ctx.on.action("test-networking"), state)
+        ports = json.loads(ctx.action_results["opened-ports"])
+        assert "8080/tcp" in ports
+
+    def test_test_networking_returns_bindings(self):
+        """test-networking action reports network bindings."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        peer = ops.testing.PeerRelation(endpoint="norma-peers")
+        network = ops.testing.Network(
+            binding_name="norma-peers",
+            bind_addresses=[
+                ops.testing.BindAddress(
+                    interface_name="eth0",
+                    addresses=[ops.testing.Address(value="10.0.0.1")],
+                )
+            ],
+            ingress_addresses=["10.0.0.1"],
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer],
+            networks=[network],
+        )
+        ctx.run(ctx.on.action("test-networking"), state)
+        bindings = json.loads(ctx.action_results["bindings"])
+        assert "norma-peers" in bindings
+        assert bindings["norma-peers"]["bind-address"] == "10.0.0.1"
+
+
+class TestUpgrade:
+    """US15: Upgrade/Refresh — version tracking and upgrade-charm handling."""
+
+    def test_upgrade_charm_fires_reconcile(self):
+        """upgrade-charm routes through the reconciler."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.upgrade_charm(), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            event_names = [e["event_name"] for e in ledger]
+            assert "upgrade-charm" in event_names
+
+    def test_get_version_returns_versions(self):
+        """get-version action returns charm and workload versions."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            layers={
+                "norma": ops.pebble.Layer(
+                    norma.build_pebble_layer(norma.CONTAINER_NAME, norma.DEFAULT_PORT, "1.2.3")
+                )
+            },
+            service_statuses={"norma": ops.pebble.ServiceStatus.ACTIVE},
+            execs=frozenset({ops.testing.Exec(command_prefix=[norma.BINARY_PATH, "--check"])}),
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("get-version"), state)
+        assert ctx.action_results["charm-version"] == "dev"
+        assert ctx.action_results["workload-version"] == "1.2.3"
+
+    def test_get_version_workload_unavailable(self):
+        """get-version reports unavailable when Pebble is disconnected."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("get-version"), state)
+        assert ctx.action_results["workload-version"] == "unavailable"
+
+
 class TestSecrets:
     """US9: Juju Secrets — create, rotate, expire, remove, grant/revoke."""
 

@@ -114,6 +114,8 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.toggle_health_action, self._on_toggle_health_action)
         self.framework.observe(self.on.test_pebble_ops_action, self._on_test_pebble_ops_action)
         self.framework.observe(self.on.trigger_notice_action, self._on_trigger_notice_action)
+        self.framework.observe(self.on.test_networking_action, self._on_test_networking_action)
+        self.framework.observe(self.on.get_version_action, self._on_get_version_action)
 
         # --- Pebble custom notice event → _reconcile ---
         self.framework.observe(self.on.norma_pebble_custom_notice, self._reconcile)
@@ -694,6 +696,63 @@ class NormaK8sCharm(ops.CharmBase):
             event.set_results({"notice-sent": "true", "key": key})
         except (ops.pebble.ExecError, ops.pebble.ConnectionError) as e:
             event.fail(f"Failed to send notice: {e}")
+
+    def _on_get_version_action(self, event: ops.ActionEvent) -> None:
+        """Return charm and workload version information."""
+        event.log("Retrieving version info")
+        charm_version = self._get_charm_version()
+
+        workload_version = "unavailable"
+        container = self.unit.get_container(norma.CONTAINER_NAME)
+        if container.can_connect():
+            try:
+                process = container.exec(
+                    [norma.BINARY_PATH, "--check"],
+                )
+                process.wait()
+                # Binary is reachable — read version from env
+                plan = container.get_plan()
+                svc = plan.services.get(norma.CONTAINER_NAME)
+                if svc:
+                    workload_version = svc.environment.get("VERSION", "unknown")
+            except (ops.pebble.ExecError, ops.pebble.ConnectionError):
+                pass
+
+        event.set_results(
+            {
+                "charm-version": charm_version,
+                "workload-version": workload_version,
+            }
+        )
+
+    def _on_test_networking_action(self, event: ops.ActionEvent) -> None:
+        """Report open ports and network binding information."""
+        event.log("Retrieving networking info")
+
+        # Opened ports
+        ports = self.unit.opened_ports()
+        port_list = [f"{p.port}/{p.protocol}" for p in ports]
+
+        # Network bindings for key endpoints
+        bindings: dict[str, dict[str, str]] = {}
+        for endpoint in ("norma-peers", "calibration-provider", "calibration-requirer"):
+            try:
+                binding = self.model.get_binding(endpoint)
+                if binding and binding.network:
+                    net = binding.network
+                    bindings[endpoint] = {
+                        "bind-address": str(net.bind_address),
+                        "ingress-address": str(net.ingress_address),
+                    }
+            except ops.ModelError:
+                bindings[endpoint] = {"error": "binding unavailable"}
+
+        event.set_results(
+            {
+                "opened-ports": json.dumps(port_list),
+                "bindings": json.dumps(bindings),
+            }
+        )
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #
