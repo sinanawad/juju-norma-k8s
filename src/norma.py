@@ -19,6 +19,7 @@ STORAGE_PATH = "/var/lib/norma"
 MARKER_FILE = "calibration-marker.json"
 BINARY_PATH = "/bin/norma"
 LEDGER_FILE = "/tmp/norma-event-ledger.json"
+DEFER_FLAG_FILE = "/tmp/norma-defer-armed"
 
 
 def read_event_ledger() -> list[dict]:
@@ -37,6 +38,21 @@ def write_event_ledger(ledger: list[dict]) -> None:
     """Write the event ledger to the charm container filesystem."""
     with open(LEDGER_FILE, "w") as f:
         f.write(json.dumps(ledger))
+
+
+def read_defer_armed() -> bool:
+    """Read the deferral arming flag from disk."""
+    try:
+        with open(DEFER_FLAG_FILE) as f:
+            return f.read().strip() == "true"
+    except FileNotFoundError:
+        return False
+
+
+def write_defer_armed(armed: bool) -> None:
+    """Persist the deferral arming flag to disk."""
+    with open(DEFER_FLAG_FILE, "w") as f:
+        f.write("true" if armed else "false")
 
 
 def validate_config(config: dict) -> tuple[bool, str]:
@@ -111,6 +127,10 @@ def build_pebble_layer(container_name: str, port: int, version: str) -> dict:
 def build_secondary_layer(version: str) -> dict:
     """Build the Pebble layer for the secondary container.
 
+    The ROCK image ships a default ``norma`` service on port 8080.  In the
+    secondary container we must override it to ``startup: disabled`` so it
+    does not conflict with the primary container on the shared pod network.
+
     Args:
         version: Charm version string passed to the workload.
 
@@ -121,6 +141,12 @@ def build_secondary_layer(version: str) -> dict:
         "summary": "norma-secondary layer",
         "description": "Pebble layer for norma-secondary",
         "services": {
+            # Disable the default service from the ROCK to avoid port clash
+            CONTAINER_NAME: {
+                "override": "replace",
+                "startup": "disabled",
+                "command": BINARY_PATH,
+            },
             "norma-secondary": {
                 "override": "replace",
                 "startup": "enabled",

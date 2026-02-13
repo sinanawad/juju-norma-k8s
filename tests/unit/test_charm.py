@@ -1707,3 +1707,226 @@ class TestSecrets:
         out = ctx.run(ctx.on.relation_broken(broken_rel), state)
         out_secret = out.get_secret(label="calibration-password")
         assert broken_rel.id not in out_secret.remote_grants
+
+
+class TestMultiContainer:
+    """US16: Multiple Containers — independent secondary container management."""
+
+    def test_secondary_pebble_ready_applies_layer(self):
+        """pebble-ready for secondary applies independent layer."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secondary = ops.testing.Container(name="norma-secondary", can_connect=True)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, secondary],
+        )
+        out = ctx.run(ctx.on.pebble_ready(secondary), state)
+        sec_container = out.get_container("norma-secondary")
+        assert sec_container.layers
+        layer = sec_container.layers["norma-secondary"]
+        assert "norma-secondary" in layer.services
+        assert layer.services["norma-secondary"].command == "/bin/norma"
+
+    def test_secondary_layer_uses_different_port(self):
+        """Secondary container uses port 8081."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secondary = ops.testing.Container(name="norma-secondary", can_connect=True)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, secondary],
+        )
+        out = ctx.run(ctx.on.pebble_ready(secondary), state)
+        sec_container = out.get_container("norma-secondary")
+        layer = sec_container.layers["norma-secondary"]
+        assert layer.services["norma-secondary"].environment["PORT"] == "8081"
+
+    def test_secondary_handled_when_primary_disconnected(self):
+        """Secondary container is managed even when primary is disconnected."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secondary = ops.testing.Container(name="norma-secondary", can_connect=True)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, secondary],
+        )
+        out = ctx.run(ctx.on.pebble_ready(secondary), state)
+        sec_container = out.get_container("norma-secondary")
+        assert sec_container.layers
+        layer = sec_container.layers["norma-secondary"]
+        assert "norma-secondary" in layer.services
+
+
+class TestSecurity:
+    """US17: Non-Root Security & Trust — check-security action."""
+
+    def test_check_security_returns_uid_gid(self):
+        """check-security returns charm and workload UID/GID."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            execs=frozenset(
+                {
+                    ops.testing.Exec(command_prefix=["id", "-u"], stdout="584792\n"),
+                    ops.testing.Exec(command_prefix=["id", "-g"], stdout="584792\n"),
+                }
+            ),
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("check-security"), state)
+        assert "charm-uid" in ctx.action_results
+        assert "charm-gid" in ctx.action_results
+        assert ctx.action_results["workload-uid"] == "584792"
+        assert ctx.action_results["workload-gid"] == "584792"
+
+    def test_check_security_trust_unavailable(self):
+        """check-security reports trust unavailable when not granted."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("check-security"), state)
+        assert ctx.action_results["trust-available"] == "false"
+
+    def test_check_security_workload_disconnected(self):
+        """check-security reports unavailable when Pebble disconnected."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("check-security"), state)
+        assert ctx.action_results["workload-uid"] == "unavailable"
+        assert ctx.action_results["workload-gid"] == "unavailable"
+
+
+class TestCMR:
+    """US19: Cross-Model Relations — remote app name in event ledger."""
+
+    def test_relation_event_logs_remote_app(self):
+        """Relation events log remote app name in event ledger."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(
+            endpoint="calibration-provider",
+            remote_app_name="remote-charm",
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+        )
+        with ctx(ctx.on.relation_changed(rel), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            rel_events = [e for e in ledger if "relation" in e["event_name"]]
+            assert any(e["extra"].get("remote-app") == "remote-charm" for e in rel_events)
+
+    def test_different_remote_app_names(self):
+        """Different remote apps have their names captured correctly."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(
+            endpoint="calibration-requirer",
+            remote_app_name="other-model-charm",
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+        )
+        with ctx(ctx.on.relation_changed(rel), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            rel_events = [e for e in ledger if "relation" in e["event_name"]]
+            assert any(e["extra"].get("remote-app") == "other-model-charm" for e in rel_events)
+
+
+class TestDeferral:
+    """US20: Event Deferral — arm/disarm/defer/re-emit mechanism."""
+
+    def test_arm_deferral(self):
+        """test-defer action arms deferral."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.action("test-defer", params={"arm": True}), state) as mgr:
+            mgr.run()
+            assert mgr.charm._defer_armed is True
+        assert ctx.action_results["deferral-armed"] == "true"
+        assert ctx.action_results["previous-state"] == "false"
+
+    def test_disarm_deferral(self):
+        """test-defer action disarms deferral."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.action("test-defer", params={"arm": False}), state) as mgr:
+            mgr.charm._defer_armed = True
+            mgr.run()
+        assert ctx.action_results["deferral-armed"] == "false"
+        assert ctx.action_results["previous-state"] == "true"
+
+    def test_deferred_event_logged(self):
+        """Armed deferral defers next event and logs it."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.config_changed(), state) as mgr:
+            mgr.charm._defer_armed = True
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            deferred = [e for e in ledger if e["extra"].get("deferred") == "true"]
+            assert len(deferred) == 1
+            assert deferred[0]["event_name"] == "config-changed"
+            assert mgr.charm._defer_armed is False
+
+    def test_update_status_not_deferred(self):
+        """update-status is not deferrable even when armed."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.update_status(), state) as mgr:
+            mgr.charm._defer_armed = True
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            deferred = [e for e in ledger if e["extra"].get("deferred") == "true"]
+            assert len(deferred) == 0
+            assert mgr.charm._defer_armed is True
+
+
+class TestOCIResource:
+    """US21: OCI Resource Lifecycle — resource refresh detection."""
+
+    def test_first_pebble_ready_no_trigger_extra(self):
+        """First pebble-ready doesn't have resource-refresh trigger."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.pebble_ready(NORMA_CONTAINER), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            pebble_events = [e for e in ledger if e["event_name"] == "pebble-ready"]
+            assert len(pebble_events) == 1
+            assert pebble_events[0]["extra"]["container"] == "norma"
+            assert "trigger" not in pebble_events[0]["extra"]
+
+    def test_second_pebble_ready_has_refresh_trigger(self):
+        """Subsequent pebble-ready has resource-refresh-or-restart trigger."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.pebble_ready(NORMA_CONTAINER), state) as mgr:
+            # Simulate a prior pebble-ready in the ledger
+            mgr.charm._event_ledger.append(
+                {
+                    "timestamp": "2026-01-01T00:00:00",
+                    "event_name": "pebble-ready",
+                    "unit_name": "norma-k8s/0",
+                    "extra": {"container": "norma"},
+                }
+            )
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            pebble_events = [e for e in ledger if e["event_name"] == "pebble-ready"]
+            assert len(pebble_events) == 2
+            assert pebble_events[1]["extra"]["trigger"] == "resource-refresh-or-restart"

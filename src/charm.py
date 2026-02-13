@@ -12,6 +12,7 @@ import contextlib
 import datetime
 import json
 import logging
+import os
 import re
 import secrets
 
@@ -44,25 +45,25 @@ class NormaK8sCharm(ops.CharmBase):
         # Forced status from set-status action (cleared on next successful reconcile)
         self._forced_status: ops.StatusBase | None = None
 
-        # Deferral arming flag for US20
-        self._defer_armed: bool = False
+        # Deferral arming flag for US20 (persisted to disk across dispatches)
+        self._defer_armed: bool = norma.read_defer_armed()
 
-        # --- Lifecycle events → _reconcile ---
-        self.framework.observe(self.on.install, self._reconcile)
-        self.framework.observe(self.on.start, self._reconcile)
-        self.framework.observe(self.on.config_changed, self._reconcile)
-        self.framework.observe(self.on.leader_elected, self._reconcile)
-        self.framework.observe(self.on.leader_settings_changed, self._reconcile)
-        self.framework.observe(self.on.upgrade_charm, self._reconcile)
-        self.framework.observe(self.on.update_status, self._reconcile)
-        self.framework.observe(self.on.secret_changed, self._reconcile)
+        # --- Lifecycle events → _on_defer_gate → _reconcile ---
+        self.framework.observe(self.on.install, self._on_defer_gate)
+        self.framework.observe(self.on.start, self._on_defer_gate)
+        self.framework.observe(self.on.config_changed, self._on_defer_gate)
+        self.framework.observe(self.on.leader_elected, self._on_defer_gate)
+        self.framework.observe(self.on.leader_settings_changed, self._on_defer_gate)
+        self.framework.observe(self.on.upgrade_charm, self._on_defer_gate)
+        self.framework.observe(self.on.update_status, self._on_defer_gate)
+        self.framework.observe(self.on.secret_changed, self._on_defer_gate)
 
-        # --- Peer relation events → _reconcile ---
-        self.framework.observe(self.on.norma_peers_relation_joined, self._reconcile)
-        self.framework.observe(self.on.norma_peers_relation_changed, self._reconcile)
-        self.framework.observe(self.on.norma_peers_relation_departed, self._reconcile)
+        # --- Peer relation events → _on_defer_gate → _reconcile ---
+        self.framework.observe(self.on.norma_peers_relation_joined, self._on_defer_gate)
+        self.framework.observe(self.on.norma_peers_relation_changed, self._on_defer_gate)
+        self.framework.observe(self.on.norma_peers_relation_departed, self._on_defer_gate)
 
-        # --- Calibration relation events → _reconcile ---
+        # --- Calibration relation events → _on_defer_gate → _reconcile ---
         for evt in (
             self.on.calibration_provider_relation_created,
             self.on.calibration_provider_relation_joined,
@@ -75,19 +76,19 @@ class NormaK8sCharm(ops.CharmBase):
             self.on.calibration_requirer_relation_departed,
             self.on.calibration_requirer_relation_broken,
         ):
-            self.framework.observe(evt, self._reconcile)
+            self.framework.observe(evt, self._on_defer_gate)
 
         # --- Pebble ready events ---
-        self.framework.observe(self.on.norma_pebble_ready, self._reconcile)
-        self.framework.observe(self.on.norma_secondary_pebble_ready, self._reconcile)
+        self.framework.observe(self.on.norma_pebble_ready, self._on_defer_gate)
+        self.framework.observe(self.on.norma_secondary_pebble_ready, self._on_defer_gate)
 
-        # --- Pebble check events → _reconcile ---
-        self.framework.observe(self.on.norma_pebble_check_failed, self._reconcile)
-        self.framework.observe(self.on.norma_pebble_check_recovered, self._reconcile)
+        # --- Pebble check events → _on_defer_gate → _reconcile ---
+        self.framework.observe(self.on.norma_pebble_check_failed, self._on_defer_gate)
+        self.framework.observe(self.on.norma_pebble_check_recovered, self._on_defer_gate)
 
-        # --- Storage events → _reconcile ---
-        self.framework.observe(self.on.data_storage_attached, self._reconcile)
-        self.framework.observe(self.on.data_storage_detaching, self._reconcile)
+        # --- Storage events → _on_defer_gate → _reconcile ---
+        self.framework.observe(self.on.data_storage_attached, self._on_defer_gate)
+        self.framework.observe(self.on.data_storage_detaching, self._on_defer_gate)
 
         # --- Dedicated handlers (permitted by constitution) ---
         self.framework.observe(self.on.stop, self._on_stop)
@@ -116,16 +117,47 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.trigger_notice_action, self._on_trigger_notice_action)
         self.framework.observe(self.on.test_networking_action, self._on_test_networking_action)
         self.framework.observe(self.on.get_version_action, self._on_get_version_action)
+        self.framework.observe(self.on.check_security_action, self._on_check_security_action)
+        self.framework.observe(self.on.test_defer_action, self._on_test_defer_action)
 
-        # --- Pebble custom notice event → _reconcile ---
-        self.framework.observe(self.on.norma_pebble_custom_notice, self._reconcile)
+        # --- Pebble custom notice event → _on_defer_gate → _reconcile ---
+        self.framework.observe(self.on.norma_pebble_custom_notice, self._on_defer_gate)
+
+    # ------------------------------------------------------------------ #
+    #  US20: Deferral gate (dedicated handler — never inside reconciler)  #
+    # ------------------------------------------------------------------ #
+
+    def _on_defer_gate(self, event: ops.EventBase) -> None:
+        """Pre-reconcile deferral gate for US20 testing.
+
+        This is a dedicated handler that intercepts events before the reconciler.
+        If deferral is armed (via the test-defer action), the event is deferred
+        here and never reaches _reconcile(). This keeps event.defer() out of
+        the reconciler, satisfying constitutional Principle VII.
+        """
+        event_name = _event_to_kebab(event)
+        # Never defer update-status (high frequency) or relation-broken
+        # (re-emission fails because the relation no longer exists).
+        skip_defer = event_name in ("update-status", "relation-broken")
+        if self._defer_armed and not skip_defer:
+            extra: dict[str, str] = {"deferred": "true"}
+            self._log_event(event_name, extra)
+            event.defer()
+            self._defer_armed = False
+            norma.write_defer_armed(False)
+            return
+        self._reconcile(event)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
     # ------------------------------------------------------------------ #
 
     def _reconcile(self, event: ops.EventBase) -> None:
-        """Holistic reconciler — single entry point for all lifecycle events."""
+        """Holistic reconciler — single entry point for all lifecycle events.
+
+        This method MUST NOT call event.defer(). All deferral logic lives in
+        _on_defer_gate() which runs before the reconciler.
+        """
         event_name = _event_to_kebab(event)
         extra: dict[str, str] = {}
 
@@ -142,9 +174,26 @@ class NormaK8sCharm(ops.CharmBase):
             extra["check"] = event.info.name
 
         # Capture notice key for pebble-custom-notice events
+        # Only log the key, not the payload — notice data may contain secrets.
         if isinstance(event, ops.PebbleCustomNoticeEvent):
             extra["notice-key"] = event.notice.key
-            extra["notice-data"] = str(event.notice.last_data)
+
+        # US19: Capture remote app name for relation events (CMR compatibility)
+        if isinstance(event, ops.RelationEvent) and event.app:
+            extra["remote-app"] = event.app.name
+
+        # US21: Detect resource refresh / pod restart for pebble-ready events
+        if isinstance(event, ops.PebbleReadyEvent):
+            container_name = event.workload.name
+            extra["container"] = container_name
+            prior = [
+                e
+                for e in self._event_ledger
+                if e["event_name"] == "pebble-ready"
+                and e["extra"].get("container") == container_name
+            ]
+            if prior:
+                extra["trigger"] = "resource-refresh-or-restart"
 
         self._log_event(event_name, extra)
 
@@ -170,78 +219,97 @@ class NormaK8sCharm(ops.CharmBase):
         # Update relation data first — independent of workload readiness
         self._update_relation_data(broken_relation=broken_relation)
 
-        # Check primary container connectivity
-        container = self.unit.get_container(norma.CONTAINER_NAME)
-        if not container.can_connect():
-            return
-
-        # Build and apply Pebble layer
-        port = int(self.config.get("calibration-int", norma.DEFAULT_PORT))
         version = self._get_charm_version()
 
-        # Validate config
-        config_dict = {
-            "calibration_string": self.config.get("calibration-string", "default"),
-            "calibration_int": port,
-            "calibration_float": float(self.config.get("calibration-float", 1.0)),
-            "calibration_bool": self.config.get("calibration-bool", True),
-        }
-        valid, error_msg = norma.validate_config(config_dict)
-        if not valid:
-            self._forced_status = ops.BlockedStatus(error_msg)
-            return
+        # --- Primary container ---
+        container = self.unit.get_container(norma.CONTAINER_NAME)
+        if container.can_connect():
+            port = int(self.config.get("calibration-int", norma.DEFAULT_PORT))
 
-        # Resolve secret config if set
-        secret_uri = self.config.get("calibration-secret")
-        if secret_uri:
+            # Validate config
+            config_dict = {
+                "calibration_string": self.config.get("calibration-string", "default"),
+                "calibration_int": port,
+                "calibration_float": float(self.config.get("calibration-float", 1.0)),
+                "calibration_bool": self.config.get("calibration-bool", True),
+            }
+            valid, error_msg = norma.validate_config(config_dict)
+            if not valid:
+                self._forced_status = ops.BlockedStatus(error_msg)
+            else:
+                # Resolve secret config if set
+                secret_ok = True
+                secret_uri = self.config.get("calibration-secret")
+                if secret_uri:
+                    try:
+                        secret = self.model.get_secret(id=secret_uri)
+                        secret.get_content(refresh=True)
+                    except ops.SecretNotFoundError:
+                        self._forced_status = ops.BlockedStatus(f"Secret not found: {secret_uri}")
+                        secret_ok = False
+                    except ops.ModelError as e:
+                        self._forced_status = ops.BlockedStatus(f"Secret error: {e}")
+                        secret_ok = False
+
+                if secret_ok:
+                    # Apply Pebble layer and replan
+                    layer_ok = True
+                    try:
+                        layer = norma.build_pebble_layer(norma.CONTAINER_NAME, port, version)
+                        container.add_layer(norma.CONTAINER_NAME, layer, combine=True)
+                        container.replan()
+                    except ops.pebble.ConnectionError:
+                        logger.warning("Pebble connection lost during layer apply")
+                        layer_ok = False
+
+                    # Set workload version
+                    try:
+                        process = container.exec([norma.BINARY_PATH, "--check"])
+                        process.wait()
+                        self.unit.set_workload_version(version)
+                    except (
+                        ops.pebble.ExecError,
+                        ops.pebble.ConnectionError,
+                    ):
+                        pass
+
+                    # Open workload port
+                    self.unit.set_ports(ops.Port("tcp", port))
+
+                    # Write storage marker
+                    if self.model.storages.get("data"):
+                        marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+                        try:
+                            if not container.exists(marker_path):
+                                marker = json.dumps(
+                                    {
+                                        "created_by": self.unit.name,
+                                        "created_at": datetime.datetime.now(
+                                            datetime.UTC
+                                        ).isoformat(),
+                                        "revision": 1,
+                                    }
+                                )
+                                container.push(marker_path, marker, make_dirs=True)
+                        except (
+                            ops.pebble.ConnectionError,
+                            ops.pebble.PathError,
+                        ):
+                            logger.debug("Storage marker write skipped")
+
+                    # Only clear forced status when layer apply succeeded
+                    if layer_ok:
+                        self._forced_status = None
+
+        # --- Secondary container (US16) ---
+        secondary = self.unit.get_container(norma.SECONDARY_CONTAINER)
+        if secondary.can_connect():
             try:
-                secret = self.model.get_secret(id=secret_uri)
-                secret.get_content(refresh=True)
-            except ops.SecretNotFoundError:
-                self._forced_status = ops.BlockedStatus(f"Secret not found: {secret_uri}")
-                return
-            except ops.ModelError as e:
-                self._forced_status = ops.BlockedStatus(f"Secret error: {e}")
-                return
-
-        # Apply Pebble layer and replan
-        try:
-            layer = norma.build_pebble_layer(norma.CONTAINER_NAME, port, version)
-            container.add_layer(norma.CONTAINER_NAME, layer, combine=True)
-            container.replan()
-        except ops.pebble.ConnectionError:
-            logger.warning("Pebble connection lost during layer apply")
-            return
-
-        # Set workload version
-        try:
-            process = container.exec([norma.BINARY_PATH, "--check"])
-            process.wait()
-            self.unit.set_workload_version(version)
-        except (ops.pebble.ExecError, ops.pebble.ConnectionError):
-            pass
-
-        # Open workload port
-        self.unit.set_ports(ops.Port("tcp", port))
-
-        # Write storage marker if storage is attached and marker doesn't exist yet
-        if self.model.storages.get("data"):
-            marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
-            try:
-                if not container.exists(marker_path):
-                    marker = json.dumps(
-                        {
-                            "created_by": self.unit.name,
-                            "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
-                            "revision": 1,
-                        }
-                    )
-                    container.push(marker_path, marker, make_dirs=True)
-            except (ops.pebble.ConnectionError, ops.pebble.PathError):
-                logger.debug("Storage marker write skipped — path not available")
-
-        # Successful reconcile — clear any forced status
-        self._forced_status = None
+                secondary_layer = norma.build_secondary_layer(version)
+                secondary.add_layer(norma.SECONDARY_CONTAINER, secondary_layer, combine=True)
+                secondary.replan()
+            except ops.pebble.ConnectionError:
+                logger.warning("Pebble connection lost during secondary layer apply")
 
     # ------------------------------------------------------------------ #
     #  Dedicated handlers                                                 #
@@ -735,7 +803,11 @@ class NormaK8sCharm(ops.CharmBase):
 
         # Network bindings for key endpoints
         bindings: dict[str, dict[str, str]] = {}
-        for endpoint in ("norma-peers", "calibration-provider", "calibration-requirer"):
+        for endpoint in (
+            "norma-peers",
+            "calibration-provider",
+            "calibration-requirer",
+        ):
             try:
                 binding = self.model.get_binding(endpoint)
                 if binding and binding.network:
@@ -751,6 +823,59 @@ class NormaK8sCharm(ops.CharmBase):
             {
                 "opened-ports": json.dumps(port_list),
                 "bindings": json.dumps(bindings),
+            }
+        )
+
+    def _on_check_security_action(self, event: ops.ActionEvent) -> None:
+        """Report security posture: UID/GID, trust, credentials."""
+        event.log("Checking security posture")
+        results: dict[str, str] = {
+            "charm-uid": str(os.getuid()),
+            "charm-gid": str(os.getgid()),
+        }
+
+        container = self.unit.get_container(norma.CONTAINER_NAME)
+        if container.can_connect():
+            for field, cmd in (
+                ("workload-uid", ["id", "-u"]),
+                ("workload-gid", ["id", "-g"]),
+            ):
+                try:
+                    proc = container.exec(cmd)
+                    stdout, _ = proc.wait_output()
+                    results[field] = stdout.strip()
+                except (
+                    ops.pebble.ExecError,
+                    ops.pebble.APIError,
+                    ops.pebble.ChangeError,
+                    ops.pebble.ConnectionError,
+                ):
+                    results[field] = "unavailable"
+        else:
+            results["workload-uid"] = "unavailable"
+            results["workload-gid"] = "unavailable"
+
+        results["trust-available"] = "false"
+        results["cloud-type"] = ""
+        try:
+            cloud_spec = self.model.get_cloud_spec()
+            results["trust-available"] = "true"
+            results["cloud-type"] = cloud_spec.type if cloud_spec else ""
+        except ops.ModelError:
+            pass
+
+        event.set_results(results)
+
+    def _on_test_defer_action(self, event: ops.ActionEvent) -> None:
+        """Arm or disarm event deferral for testing."""
+        event.log("Configuring event deferral")
+        previous = self._defer_armed
+        self._defer_armed = event.params.get("arm", True)
+        norma.write_defer_armed(self._defer_armed)
+        event.set_results(
+            {
+                "deferral-armed": str(self._defer_armed).lower(),
+                "previous-state": str(previous).lower(),
             }
         )
 
