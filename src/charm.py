@@ -80,6 +80,10 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.norma_pebble_ready, self._reconcile)
         self.framework.observe(self.on.norma_secondary_pebble_ready, self._reconcile)
 
+        # --- Storage events → _reconcile ---
+        self.framework.observe(self.on.data_storage_attached, self._reconcile)
+        self.framework.observe(self.on.data_storage_detaching, self._reconcile)
+
         # --- Dedicated handlers (permitted by constitution) ---
         self.framework.observe(self.on.stop, self._on_stop)
         self.framework.observe(self.on.remove, self._on_remove)
@@ -101,6 +105,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.get_relation_data_action, self._on_get_relation_data_action)
         self.framework.observe(self.on.get_cluster_info_action, self._on_get_cluster_info_action)
         self.framework.observe(self.on.get_secret_info_action, self._on_get_secret_info_action)
+        self.framework.observe(self.on.check_storage_action, self._on_check_storage_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -196,6 +201,22 @@ class NormaK8sCharm(ops.CharmBase):
 
         # Open workload port
         self.unit.set_ports(ops.Port("tcp", port))
+
+        # Write storage marker if storage is attached and marker doesn't exist yet
+        if self.model.storages.get("data"):
+            marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+            try:
+                if not container.exists(marker_path):
+                    marker = json.dumps(
+                        {
+                            "created_by": self.unit.name,
+                            "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                            "revision": 1,
+                        }
+                    )
+                    container.push(marker_path, marker, make_dirs=True)
+            except (ops.pebble.ConnectionError, ops.pebble.PathError):
+                logger.debug("Storage marker write skipped — path not available")
 
         # Successful reconcile — clear any forced status
         self._forced_status = None
@@ -423,6 +444,47 @@ class NormaK8sCharm(ops.CharmBase):
                 "secret-id": secret_id,
                 "has-content": str(has_content).lower(),
                 "rotation": "monthly",
+            }
+        )
+
+    def _on_check_storage_action(self, event: ops.ActionEvent) -> None:
+        """Check storage status and data integrity."""
+        event.log("Checking storage status")
+        container = self.unit.get_container(norma.CONTAINER_NAME)
+        marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+
+        attached = bool(self.model.storages.get("data"))
+        can_connect = container.can_connect()
+
+        # Check marker file
+        marker_exists = False
+        marker_content = ""
+        if attached and can_connect:
+            try:
+                marker_exists = container.exists(marker_path)
+                if marker_exists:
+                    marker_content = container.pull(marker_path).read()
+            except (ops.pebble.ConnectionError, ops.pebble.PathError):
+                pass
+
+        # Test writability
+        writable = False
+        if attached and can_connect:
+            test_path = f"{norma.STORAGE_PATH}/.write-test"
+            try:
+                container.push(test_path, "test", make_dirs=True)
+                container.remove_path(test_path)
+                writable = True
+            except (ops.pebble.ConnectionError, ops.pebble.PathError):
+                pass
+
+        event.set_results(
+            {
+                "attached": str(attached).lower(),
+                "mount-point": norma.STORAGE_PATH,
+                "marker-exists": str(marker_exists).lower(),
+                "marker-content": marker_content,
+                "writable": str(writable).lower(),
             }
         )
 

@@ -938,6 +938,152 @@ class TestClusterInfo:
         assert units == ["norma-k8s/0"]
 
 
+class TestStorage:
+    """US10: Juju Storage — filesystem storage with marker file persistence."""
+
+    def test_storage_attached_fires_reconcile(self):
+        """storage-attached routes through the reconciler."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        ctx.run(ctx.on.storage_attached(storage), state)
+
+    def test_storage_detaching_fires_reconcile(self):
+        """storage-detaching routes through the reconciler and is logged."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        with ctx(ctx.on.storage_detaching(storage), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            event_names = [e["event_name"] for e in ledger]
+            assert "storage-detaching" in event_names
+
+    def test_marker_written_on_reconcile(self):
+        """Marker file is written to storage on successful reconcile."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        norma_with_fs = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_with_fs, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        out = ctx.run(ctx.on.pebble_ready(norma_with_fs), state)
+        norma_container = out.get_container("norma")
+        marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+        fs = norma_container.get_filesystem(ctx)
+        marker_file = fs / marker_path.lstrip("/")
+        assert marker_file.exists()
+        content = json.loads(marker_file.read_text())
+        assert content["created_by"] == "norma-k8s/0"
+        assert "created_at" in content
+        assert content["revision"] == 1
+
+    def test_marker_not_overwritten_if_exists(self):
+        """Marker file is not overwritten if already present."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        existing_marker = json.dumps(
+            {"created_by": "norma-k8s/1", "created_at": "2026-01-01T00:00:00", "revision": 5}
+        )
+        norma_with_marker = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_with_marker, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+        # Pre-populate marker via Pebble API, then run the handler
+        with ctx(ctx.on.config_changed(), state) as mgr:
+            container = mgr.charm.unit.get_container("norma")
+            container.push(marker_path, existing_marker, make_dirs=True)
+            mgr.run()
+            # Read back within the context — marker should be unchanged
+            content_str = container.pull(marker_path).read()
+        content = json.loads(content_str)
+        assert content["created_by"] == "norma-k8s/1"
+        assert content["revision"] == 5
+
+    def test_check_storage_action_attached(self):
+        """check-storage returns correct data when storage is attached."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        existing_marker = json.dumps(
+            {"created_by": "norma-k8s/0", "created_at": "2026-01-01T00:00:00", "revision": 1}
+        )
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+        # Pre-populate marker via Pebble API inside the context manager
+        with ctx(ctx.on.action("check-storage"), state) as mgr:
+            container = mgr.charm.unit.get_container("norma")
+            container.push(marker_path, existing_marker, make_dirs=True)
+            mgr.run()
+        assert ctx.action_results["attached"] == "true"
+        assert ctx.action_results["mount-point"] == norma.STORAGE_PATH
+        assert ctx.action_results["marker-exists"] == "true"
+        content = json.loads(ctx.action_results["marker-content"])
+        assert content["created_by"] == "norma-k8s/0"
+        assert ctx.action_results["writable"] == "true"
+
+    def test_check_storage_action_no_marker(self):
+        """check-storage reports no marker when storage is empty."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        ctx.run(ctx.on.action("check-storage"), state)
+        assert ctx.action_results["attached"] == "true"
+        assert ctx.action_results["marker-exists"] == "false"
+        assert ctx.action_results["marker-content"] == ""
+
+    def test_check_storage_action_pebble_disconnected(self):
+        """check-storage reports attached but not writable when Pebble is disconnected."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        ctx.run(ctx.on.action("check-storage"), state)
+        assert ctx.action_results["attached"] == "true"
+        assert ctx.action_results["marker-exists"] == "false"
+        assert ctx.action_results["writable"] == "false"
+
+    def test_check_storage_action_no_storage(self):
+        """check-storage reports not attached when no storage exists."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("check-storage"), state)
+        assert ctx.action_results["attached"] == "false"
+        assert ctx.action_results["writable"] == "false"
+
+
 class TestSecrets:
     """US9: Juju Secrets — create, rotate, expire, remove, grant/revoke."""
 
