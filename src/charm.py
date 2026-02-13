@@ -80,6 +80,10 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.norma_pebble_ready, self._reconcile)
         self.framework.observe(self.on.norma_secondary_pebble_ready, self._reconcile)
 
+        # --- Pebble check events → _reconcile ---
+        self.framework.observe(self.on.norma_pebble_check_failed, self._reconcile)
+        self.framework.observe(self.on.norma_pebble_check_recovered, self._reconcile)
+
         # --- Storage events → _reconcile ---
         self.framework.observe(self.on.data_storage_attached, self._reconcile)
         self.framework.observe(self.on.data_storage_detaching, self._reconcile)
@@ -106,6 +110,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.get_cluster_info_action, self._on_get_cluster_info_action)
         self.framework.observe(self.on.get_secret_info_action, self._on_get_secret_info_action)
         self.framework.observe(self.on.check_storage_action, self._on_check_storage_action)
+        self.framework.observe(self.on.toggle_health_action, self._on_toggle_health_action)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -123,6 +128,10 @@ class NormaK8sCharm(ops.CharmBase):
         # Capture departing unit identity for relation-departed events
         if isinstance(event, ops.RelationDepartedEvent) and event.departing_unit:
             extra["departing-unit"] = event.departing_unit.name
+
+        # Capture check name for pebble-check-failed/recovered events
+        if isinstance(event, (ops.PebbleCheckFailedEvent, ops.PebbleCheckRecoveredEvent)):
+            extra["check"] = event.info.name
 
         self._log_event(event_name, extra)
 
@@ -509,6 +518,26 @@ class NormaK8sCharm(ops.CharmBase):
                 "units": json.dumps(all_units),
             }
         )
+
+    def _on_toggle_health_action(self, event: ops.ActionEvent) -> None:
+        """Toggle the workload health between healthy and unhealthy."""
+        event.log("Toggling workload health")
+        container_name = event.params.get("container", norma.CONTAINER_NAME)
+        container = self.unit.get_container(container_name)
+
+        if not container.can_connect():
+            event.fail(f"Cannot connect to container {container_name}")
+            return
+
+        try:
+            if container.exists(norma.HEALTH_FLAG_FILE):
+                container.remove_path(norma.HEALTH_FLAG_FILE)
+                event.set_results({"previous-state": "unhealthy", "new-state": "healthy"})
+            else:
+                container.push(norma.HEALTH_FLAG_FILE, "unhealthy", make_dirs=True)
+                event.set_results({"previous-state": "healthy", "new-state": "unhealthy"})
+        except ops.pebble.ConnectionError:
+            event.fail(f"Lost connection to container {container_name}")
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #

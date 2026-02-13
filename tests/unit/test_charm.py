@@ -1084,6 +1084,127 @@ class TestStorage:
         assert ctx.action_results["writable"] == "false"
 
 
+class TestHealthChecks:
+    """US11: Pebble Health Checks — check-failed/recovered events and toggle-health action."""
+
+    def _container_with_checks(self):
+        """Helper: return a connected norma container with health checks in layer and infos."""
+        layer = norma.build_pebble_layer(norma.CONTAINER_NAME, norma.DEFAULT_PORT, "dev")
+        parsed = ops.pebble.Layer(layer)
+        # Build check_infos from the parsed plan so values match exactly
+        infos = []
+        for name, check in parsed.checks.items():
+            infos.append(
+                ops.testing.CheckInfo(
+                    name=name,
+                    level=check.level,
+                    startup=check.startup,
+                    threshold=check.threshold,
+                )
+            )
+        return ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            layers={"norma": parsed},
+            service_statuses={"norma": ops.pebble.ServiceStatus.ACTIVE},
+            check_infos=infos,
+        )
+
+    def test_pebble_check_failed_logged_with_check_name(self):
+        """pebble-check-failed routes through reconciler with check name in extra."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = self._container_with_checks()
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        check_info = ops.testing.CheckInfo(
+            name="health",
+            level=ops.pebble.CheckLevel.READY,
+            status=ops.pebble.CheckStatus.DOWN,
+        )
+        with ctx(ctx.on.pebble_check_failed(norma_c, info=check_info), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            check_events = [e for e in ledger if e["event_name"] == "pebble-check-failed"]
+            assert len(check_events) == 1
+            assert check_events[0]["extra"]["check"] == "health"
+
+    def test_pebble_check_recovered_logged_with_check_name(self):
+        """pebble-check-recovered routes through reconciler with check name in extra."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = self._container_with_checks()
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        check_info = ops.testing.CheckInfo(
+            name="health",
+            level=ops.pebble.CheckLevel.READY,
+            status=ops.pebble.CheckStatus.UP,
+        )
+        with ctx(ctx.on.pebble_check_recovered(norma_c, info=check_info), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            check_events = [e for e in ledger if e["event_name"] == "pebble-check-recovered"]
+            assert len(check_events) == 1
+            assert check_events[0]["extra"]["check"] == "health"
+
+    def test_toggle_health_to_unhealthy(self):
+        """toggle-health creates flag file when workload is healthy."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("toggle-health"), state)
+        assert ctx.action_results["previous-state"] == "healthy"
+        assert ctx.action_results["new-state"] == "unhealthy"
+
+    def test_toggle_health_to_healthy(self):
+        """toggle-health removes flag file when workload is unhealthy."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        # Pre-create flag file via Pebble API
+        with ctx(ctx.on.action("toggle-health"), state) as mgr:
+            container = mgr.charm.unit.get_container("norma")
+            container.push(norma.HEALTH_FLAG_FILE, "unhealthy", make_dirs=True)
+            mgr.run()
+        assert ctx.action_results["previous-state"] == "unhealthy"
+        assert ctx.action_results["new-state"] == "healthy"
+
+    def test_toggle_health_fails_when_disconnected(self):
+        """toggle-health fails when Pebble is not connected."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(ctx.on.action("toggle-health"), state)
+        assert "Cannot connect" in str(exc_info.value)
+
+    def test_toggle_health_custom_container(self):
+        """toggle-health works with a custom container name."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secondary = ops.testing.Container(
+            name="norma-secondary",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, secondary],
+        )
+        ctx.run(ctx.on.action("toggle-health", params={"container": "norma-secondary"}), state)
+        assert ctx.action_results["previous-state"] == "healthy"
+        assert ctx.action_results["new-state"] == "unhealthy"
+
+
 class TestSecrets:
     """US9: Juju Secrets — create, rotate, expire, remove, grant/revoke."""
 
