@@ -250,6 +250,23 @@ self._loki = LogProxyConsumer(
 
 ---
 
+## R6: Charm Introspection Action (US22)
+
+**Decision**: Each report section is a JSON-encoded string value in the Juju action results dict, keyed by section name. Individual private collector methods on the charm class (`_collect_config()`, `_collect_relations()`, etc.), each returning a plain dict.
+
+**Rationale**: Juju action results are key-value pairs where values must be strings. JSON encoding per-section allows CI to parse individual sections with standard tooling (`jq .results.config | jq -r . | jq .`). Keeping each collector as a separate method makes them independently testable. Collectors need direct access to `self.model`, `self.unit`, `self.config`, so they belong on the charm class rather than in a separate module.
+
+**Graceful degradation**: Each collector wraps its logic in try/except, returning `{"status": "unavailable", "reason": "<error>"}` on failure. The action handler never fails due to a subsystem error. Container disconnection, missing storage, or absent secrets return partial data rather than failing the action.
+
+**Truncation**: If total serialized payload exceeds 250KB, the largest section (typically event-ledger) is truncated and its `truncated` flag set to true.
+
+**Alternatives considered**:
+- Single JSON blob as one result key: Simpler but harder to extract individual sections.
+- Separate `introspection.py` module: Would require passing the charm model/unit objects, adding coupling without benefit.
+- Fail action if any section fails: Less informative for CI — knowing *why* a section is unavailable is valuable.
+
+---
+
 ## Summary of All NEEDS CLARIFICATION Resolved
 
 | Item | Resolution |
@@ -260,3 +277,4 @@ self._loki = LogProxyConsumer(
 | Self-relation mechanism | Provides + requires with same interface |
 | Secret config type | `type: secret`, resolve with `model.get_secret()` |
 | COS library versions | prometheus_scrape v0, grafana_dashboard v0, loki_push_api v0 |
+| Introspect action format | Per-section JSON strings in action results, private collector methods |

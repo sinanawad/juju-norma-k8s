@@ -175,6 +175,52 @@ Priority: BlockedStatus > MaintenanceStatus > WaitingStatus > ActiveStatus
     secret-remove  ──► remove old revision
 ```
 
+## Introspection Report (US22)
+
+The `introspect` action returns a flat key-value map where each key is a section name and each value is a JSON-encoded string. Two metadata keys (`timestamp` and `unit`) are plain strings.
+
+### Top-Level Keys
+
+| Key | Type | Always Present | Description |
+|-----|------|---------------|-------------|
+| `timestamp` | string (ISO 8601) | Yes | When the report was generated |
+| `unit` | string | Yes | Unit name (e.g., "norma-k8s/0") |
+| `identity` | JSON string | Yes | Unit, app, and model identity |
+| `version` | JSON string | Yes | Charm and workload versions |
+| `leadership` | JSON string | Yes | Leadership status |
+| `config` | JSON string | Yes | All config options with values |
+| `event-ledger` | JSON string | Yes | Recent event history |
+| `relations` | JSON string | Yes | All relation endpoints and data |
+| `storage` | JSON string | Yes | Storage attachment status |
+| `containers` | JSON string | Yes | Container connectivity and services |
+| `secrets` | JSON string | Yes | Secret metadata (no values) |
+
+### Section Schemas
+
+**identity**: `{"unit": "norma-k8s/0", "app": "norma-k8s", "model": "test-model", "is_leader": true}`
+
+**version**: `{"charm_version": "1610bbe", "workload_version": "0.1.0", "workload_available": true}`
+
+**leadership**: `{"is_leader": true}`
+
+**config**: `{"options": {"calibration-string": {"value": "hello", "default": "default", "changed": true}, ...}}`
+
+**event-ledger**: `{"count": 5, "events": [...], "truncated": false}`
+
+**relations**: `{"endpoints": {"norma-peers": {"interface": "norma_peers", "relations": [{"relation_id": 1, "remote_app": "norma-k8s", ...}]}}}`
+
+**storage**: `{"storages": {"data": {"attached": true, "location": "/var/lib/norma", "count": 1}}}`
+
+**containers**: `{"norma": {"connected": true, "services": {"norma": {"current": "active", "startup": "enabled"}}}, ...}`
+
+**secrets**: `{"secrets": [{"label": "calibration-secret", "uri": "secret:abc123", "revision": 1, "owner": "application"}]}`
+
+### Unavailable Section
+
+When a collector fails: `{"status": "unavailable", "reason": "Description of what went wrong"}`
+
+---
+
 ## Edge Case Assignments (from spec)
 
 Deferred to planning per spec clarification. Assignments to user stories:

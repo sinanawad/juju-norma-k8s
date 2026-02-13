@@ -6,7 +6,7 @@
 ## Summary
 
 Build a comprehensive Juju K8s calibration charm (`norma-k8s`) that exercises
-all 21 Juju features relevant to K8s charms. The charm follows the holistic
+all 22 Juju features relevant to K8s charms. The charm follows the holistic
 reconciler architecture with a purpose-built Go binary workload co-located in
 `workload/`, managed via Pebble in two containers (same ROCK image, different
 ports). Every feature is testable independently via dedicated actions, making
@@ -25,7 +25,7 @@ the charm suitable as a CI validation suite for Juju itself.
 **Performance Goals**: Active in <120s, scale 1→3 in <180s, actions <30s
 **Constraints**: Non-root execution, chiselled ROCK, no StoredState, no
 event.defer() for control flow
-**Scale/Scope**: 21 user stories, 17 actions, 2 containers, 7+ relation
+**Scale/Scope**: 22 user stories, 18 actions, 2 containers, 7+ relation
 endpoints, 5 config options (one per type)
 
 ## Constitution Check

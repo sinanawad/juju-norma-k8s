@@ -556,6 +556,34 @@ new workload version.
 
 ---
 
+### User Story 22 - Charm Introspection (Priority: P22)
+
+A CI pipeline or developer runs a single action on the charm unit that
+returns a comprehensive report of all internal charm state — event history,
+configuration, relations, storage, containers, leadership, secrets metadata,
+version, and unit identity — so that charm internals can be verified
+independently of what Juju reports. An optional section filter limits the
+report to specific sections for targeted CI assertions.
+
+**Why this priority**: Individual per-topic actions already exist in the
+charm. This feature's value is the single-call aggregation that CI can
+parse programmatically, reducing multiple action calls to one.
+
+**Independent Test**: Deploy the charm, perform some operations (config
+change, relate, store data), then run the introspection action and verify
+the returned report contains all expected sections with accurate data.
+
+**Acceptance Scenarios**:
+
+1. **Given** a deployed unit in active state, **When** the operator runs the introspect action, **Then** the action returns a structured report containing sections for: event ledger, configuration, relations, storage, containers, leadership, secrets (metadata only), version, and identity.
+2. **Given** a deployed unit with active peer relations and custom configuration, **When** the operator runs the introspect action, **Then** the relations section lists all active relations with their interface, endpoint, and relation data, and the configuration section shows all current config values including any changed from defaults.
+3. **Given** a deployed unit where the workload container is not yet ready, **When** the operator runs the introspect action, **Then** the report still returns successfully with available sections populated and container/workload sections indicating the unavailable state rather than failing.
+4. **Given** a deployed unit, **When** the operator runs the introspect action with a section filter specifying "relations,config", **Then** the report contains only the relations and config sections.
+5. **Given** a deployed unit, **When** the operator runs the introspect action with no filter, **Then** all sections are included.
+6. **Given** a deployed unit, **When** the operator runs the introspect action with an unrecognised section name, **Then** that section name is silently ignored and the report contains only valid matching sections.
+
+---
+
 ### Edge Cases
 
 - What happens when `pebble-ready` fires but the container loses connectivity before the layer is applied?
@@ -594,6 +622,7 @@ new workload version.
 - **FR-021**: The charm MUST support arming event deferral via action, recording deferrals and re-emissions in the event ledger, and validating that non-deferrable events cannot be deferred.
 - **FR-022**: The charm MUST handle OCI resource refresh by re-applying Pebble layers and recovering to active status when `juju attach-resource` updates the container image.
 - **FR-023**: The charm MUST exercise Pebble service control operations (stop, start, restart) and plan introspection (get_plan, get_services) in addition to file and exec operations.
+- **FR-024**: The charm MUST provide a single `introspect` action that returns a comprehensive structured report of all internal charm state (event ledger, config, relations, storage, containers, leadership, secrets metadata, version, identity) with optional section filtering. The action MUST succeed even when subsystems are unavailable, and MUST NOT include actual secret content.
 
 ### Key Entities
 
@@ -614,7 +643,7 @@ new workload version.
 
 ### Measurable Outcomes
 
-- **SC-001**: All 21 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
+- **SC-001**: All 22 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
 - **SC-002**: Each user story can be tested independently by deploying the charm and running specific actions without requiring all other stories to be implemented.
 - **SC-003**: The charm reaches active status within 120 seconds of deployment on a standard MicroK8s cluster.
 - **SC-004**: Scaling from 1 to 3 units completes with all units active within 180 seconds.

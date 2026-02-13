@@ -411,6 +411,22 @@
 
 ---
 
+## Phase 25: User Story 22 — Charm Introspection (Priority: P22)
+
+**Purpose**: Single action returns comprehensive structured report of all internal charm state with optional section filtering
+
+**Dependencies**: All prior user stories (collectors read data populated by US1-US21)
+
+- [ ] T089 Add `introspect` action definition with `sections` parameter to `charmcraft.yaml` per `contracts/actions-schema.yaml`. Register `introspect_action` observer in `__init__` and add `REPORT_SECTIONS` constant (identity, version, leadership, config, event-ledger, relations, storage, containers, secrets) in `src/charm.py`
+- [ ] T090 [P] Implement 9 section collectors (`_collect_identity`, `_collect_version`, `_collect_leadership`, `_collect_config`, `_collect_event_ledger`, `_collect_relations`, `_collect_storage`, `_collect_containers`, `_collect_secrets`) as private methods on the charm class, each returning a plain dict and wrapped in try/except for graceful degradation (`{"status": "unavailable", "reason": "..."}`), in `src/charm.py`
+- [ ] T091 Wire all collectors into `_on_introspect_action` handler: call each collector, JSON-encode each section, set action results with `timestamp` and `unit` metadata. Add truncation logic (if total payload exceeds 250KB, truncate largest section). Add section filtering: parse `sections` param as comma-separated list, intersect with `REPORT_SECTIONS`, run only matching collectors; empty filter returns all sections; invalid section names silently ignored. In `src/charm.py`
+- [ ] T092 [P] Add unit tests for introspect action in `tests/unit/test_charm.py`: `TestIntrospectAction` class with tests for: all-sections returned, identity section accuracy, config section with changed values, containers when disconnected (graceful degradation), relations section lists endpoints, section filter returns only requested sections, empty filter returns all, invalid section silently ignored, non-leader handling, truncation on large payload
+- [ ] T093 CLI Acceptance (Constitution VIII): Deploy charm, run `juju run norma-k8s/0 introspect`, verify all 9 sections present with accurate data. Run with `sections=config,leadership` and verify only those sections returned. Run with `sections=config,nonexistent` and verify only config returned. Verify action completes within 5 seconds.
+
+**Checkpoint**: `juju run norma-k8s/0 introspect` returns full structured report, filtering works, graceful degradation on disconnected containers
+
+---
+
 ## Phase 24: Polish & Cross-Cutting Concerns
 
 **Purpose**: Validation, cleanup, and final integration across all user stories
@@ -435,6 +451,7 @@
   - See cross-story dependencies below
 - **CI Pipeline (Phase O1)**: Orthogonal — can start after Setup, defer until post-MVP, or do anytime
 - **Integration Tests (Phase O2)**: Orthogonal — each test group can start after its story cluster is implemented
+- **Introspection (Phase 25)**: Depends on foundational stories (US1-US9) being complete; can run before US10-US21
 - **Polish (Phase 24)**: Depends on all user stories being complete
 
 ### Cross-Story Dependencies
@@ -452,6 +469,7 @@ Most stories are independent after Foundational. Notable dependencies:
 | US16 (Multi-Container) | US2 (Pebble) | Secondary container extends Pebble management |
 | US19 (CMR) | US7 (Relations) | CMR uses calibration relation endpoints |
 | US21 (Resource) | US2 (Pebble) | Resource refresh triggers pebble-ready |
+| US22 (Introspect) | US1-US9 | Collectors read data populated by prior stories |
 | All stories | US1 (Lifecycle) | Event ledger used for verification |
 
 ### Within Each User Story
@@ -529,6 +547,7 @@ Task: "Create Prometheus alert rules in src/prometheus_alert_rules/norma_alerts.
 7. US11-US13 (Health/Pebble Ops/Notices) → Test → Advanced Pebble
 8. US14-US17 (Network/Upgrade/Multi-Container/Security) → Test → Operational
 9. US18-US21 (COS/CMR/Defer/Resource) → Test → Full calibration suite
+   9a. US22 (Introspection) → Test → Single-call state report
 10. Polish → **Complete!**
 11. CI Pipeline (Phase O1) → Can be done at any point from step 1 onward
 12. Integration Tests (Phase O2) → Can start after each story cluster is complete
