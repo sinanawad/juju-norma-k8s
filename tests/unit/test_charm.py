@@ -1341,7 +1341,7 @@ class TestNotices:
                 {
                     ops.testing.Exec(
                         command_prefix=[
-                            "/usr/bin/pebble",
+                            "/charm/bin/pebble",
                             "notify",
                             "canonical.com/norma/calibration-test",
                         ]
@@ -1376,7 +1376,7 @@ class TestNotices:
                 {
                     ops.testing.Exec(
                         command_prefix=[
-                            "/usr/bin/pebble",
+                            "/charm/bin/pebble",
                             "notify",
                             "canonical.com/norma/test",
                             "foo=bar",

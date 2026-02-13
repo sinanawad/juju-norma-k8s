@@ -680,8 +680,8 @@ class NormaK8sCharm(ops.CharmBase):
             ) as e:
                 results[name] = f"fail: {e}"
 
-        test_path = "/tmp/norma-pebble-test.txt"
-        test_dir = "/tmp/norma-pebble-test-dir/nested"
+        test_path = "/var/lib/norma/pebble-test.txt"
+        test_dir = "/var/lib/norma/pebble-test-dir/nested"
         test_content = "pebble-ops-test-data"
 
         # --- File operations ---
@@ -696,9 +696,9 @@ class NormaK8sCharm(ops.CharmBase):
             container.make_dir(test_dir, make_parents=True)
 
         def op_list_files():
-            files = container.list_files("/tmp")
+            files = container.list_files("/var/lib/norma")
             names = [f.name for f in files]
-            assert "norma-pebble-test.txt" in names
+            assert "pebble-test.txt" in names
 
         def op_exec():
             proc = container.exec([norma.BINARY_PATH, "--check"])
@@ -718,9 +718,9 @@ class NormaK8sCharm(ops.CharmBase):
 
         def op_exists():
             # Push a temp file, verify exists, then clean up
-            container.push("/tmp/norma-exists-test", "x", make_dirs=True)
-            assert container.exists("/tmp/norma-exists-test")
-            container.remove_path("/tmp/norma-exists-test")
+            container.push("/var/lib/norma/exists-test", "x", make_dirs=True)
+            assert container.exists("/var/lib/norma/exists-test")
+            container.remove_path("/var/lib/norma/exists-test")
 
         # --- Service operations ---
         service_name = container_name
@@ -758,7 +758,7 @@ class NormaK8sCharm(ops.CharmBase):
 
         # Cleanup test dir
         with contextlib.suppress(ops.pebble.PathError):
-            container.remove_path("/tmp/norma-pebble-test-dir", recursive=True)
+            container.remove_path("/var/lib/norma/pebble-test-dir", recursive=True)
 
         results["summary"] = f"{passed}/{total} passed"
         event.set_results(results)
@@ -785,7 +785,7 @@ class NormaK8sCharm(ops.CharmBase):
             return
 
         try:
-            cmd = ["/usr/bin/pebble", "notify", key]
+            cmd = ["/charm/bin/pebble", "notify", key]
             for k, v in data_dict.items():
                 cmd.append(f"{k}={v}")
             process = container.exec(cmd)

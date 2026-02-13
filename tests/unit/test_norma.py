@@ -31,7 +31,7 @@ class TestConstants:
         assert norma.SECONDARY_PORT == 8081
 
     def test_health_flag_file(self):
-        assert norma.HEALTH_FLAG_FILE == "/tmp/norma-unhealthy"
+        assert norma.HEALTH_FLAG_FILE == "/var/lib/norma/norma-unhealthy"
 
     def test_storage_path(self):
         assert norma.STORAGE_PATH == "/var/lib/norma"

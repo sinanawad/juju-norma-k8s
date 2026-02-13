@@ -14,7 +14,7 @@ CONTAINER_NAME = "norma"
 SECONDARY_CONTAINER = "norma-secondary"
 DEFAULT_PORT = 8080
 SECONDARY_PORT = 8081
-HEALTH_FLAG_FILE = "/tmp/norma-unhealthy"
+HEALTH_FLAG_FILE = "/var/lib/norma/norma-unhealthy"
 STORAGE_PATH = "/var/lib/norma"
 MARKER_FILE = "calibration-marker.json"
 BINARY_PATH = "/bin/norma"
@@ -97,6 +97,7 @@ def build_pebble_layer(container_name: str, port: int, version: str) -> dict:
                 "environment": {
                     "PORT": str(port),
                     "VERSION": version,
+                    "HEALTH_FLAG_FILE": HEALTH_FLAG_FILE,
                 },
             },
         },
