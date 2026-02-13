@@ -1,0 +1,63 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Norma K8s Calibration Charm Dashboard",
+  "editable": true,
+  "panels": [
+    {
+      "title": "HTTP Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(norma_http_requests_total{juju_application=\"$juju_application\"}[5m])",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "datasource": { "uid": "${prometheusds}", "type": "prometheus" }
+    },
+    {
+      "title": "Health Status",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "norma_healthy{juju_application=\"$juju_application\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "datasource": { "uid": "${prometheusds}", "type": "prometheus" }
+    },
+    {
+      "title": "Health Toggle Count",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "norma_health_toggles_total{juju_application=\"$juju_application\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "datasource": { "uid": "${prometheusds}", "type": "prometheus" }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "prometheusds",
+        "type": "datasource",
+        "query": "prometheus"
+      },
+      {
+        "name": "juju_application",
+        "type": "query",
+        "datasource": { "uid": "${prometheusds}", "type": "prometheus" },
+        "query": "label_values(up{juju_application=~\".+\"}, juju_application)"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Norma K8s Calibration",
+  "uid": ""
+}

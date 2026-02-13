@@ -5,6 +5,8 @@ description = "Juju K8s calibration charm exercising all charm features"
 requires-python = ">=3.12"
 dependencies = [
     "ops",
+    "cosl",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
@@ -32,4 +34,4 @@ show_missing = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "lib"]

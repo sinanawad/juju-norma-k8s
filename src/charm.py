@@ -17,6 +17,9 @@ import re
 import secrets
 
 import ops
+from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
+from charms.loki_k8s.v1.loki_push_api import LogForwarder
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 
 import norma
 
@@ -122,6 +125,18 @@ class NormaK8sCharm(ops.CharmBase):
 
         # --- Pebble custom notice event → _on_defer_gate → _reconcile ---
         self.framework.observe(self.on.norma_pebble_custom_notice, self._on_defer_gate)
+
+        # --- COS Observability (US18) ---
+        self._metrics_endpoint = MetricsEndpointProvider(
+            self,
+            jobs=[
+                {
+                    "static_configs": [{"targets": [f"*:{norma.DEFAULT_PORT}"]}],
+                }
+            ],
+        )
+        self._grafana_dashboard = GrafanaDashboardProvider(self)
+        self._log_forwarder = LogForwarder(self, relation_name="log-proxy")
 
     # ------------------------------------------------------------------ #
     #  US20: Deferral gate (dedicated handler — never inside reconciler)  #

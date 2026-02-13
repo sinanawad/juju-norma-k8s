@@ -1,0 +1,27 @@
+groups:
+  - name: NormaAlerts
+    rules:
+      - alert: NormaWorkloadDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Norma workload is down"
+          description: "Norma workload {{ $labels.instance }} has been down for more than 1 minute."
+      - alert: NormaHealthCheckFailing
+        expr: norma_healthy == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Norma health check failing"
+          description: "Norma workload {{ $labels.instance }} health check has been failing for more than 2 minutes."
+      - alert: NormaHighErrorRate
+        expr: rate(norma_http_requests_total{status=~"5.."}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Norma high error rate"
+          description: "Norma workload {{ $labels.instance }} has a non-zero 5xx error rate."

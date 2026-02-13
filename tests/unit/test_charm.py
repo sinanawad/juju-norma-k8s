@@ -1930,3 +1930,43 @@ class TestOCIResource:
             pebble_events = [e for e in ledger if e["event_name"] == "pebble-ready"]
             assert len(pebble_events) == 2
             assert pebble_events[1]["extra"]["trigger"] == "resource-refresh-or-restart"
+
+
+class TestCOSObservability:
+    """Verify COS library initialization (US18)."""
+
+    def test_metrics_endpoint_initialized(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.install(), state) as mgr:
+            mgr.run()
+            assert hasattr(mgr.charm, "_metrics_endpoint")
+            from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
+
+            assert isinstance(mgr.charm._metrics_endpoint, MetricsEndpointProvider)
+
+    def test_grafana_dashboard_initialized(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.install(), state) as mgr:
+            mgr.run()
+            assert hasattr(mgr.charm, "_grafana_dashboard")
+            from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
+
+            assert isinstance(mgr.charm._grafana_dashboard, GrafanaDashboardProvider)
+
+    def test_log_forwarder_initialized(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.install(), state) as mgr:
+            mgr.run()
+            assert hasattr(mgr.charm, "_log_forwarder")
+            from charms.loki_k8s.v1.loki_push_api import LogForwarder
+
+            assert isinstance(mgr.charm._log_forwarder, LogForwarder)
