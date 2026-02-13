@@ -166,6 +166,13 @@ actions:
         type: string
         description: "Capability to check (e.g., pebble, config, relations)"
     required: [check]
+  introspect:
+    description: Return comprehensive structured report of all internal charm state
+    params:
+      sections:
+        type: string
+        description: "Comma-separated section filter (e.g., config,leadership). Empty = all sections."
+        default: ""
 
 peers:
   norma-peers:

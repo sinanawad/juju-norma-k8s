@@ -1970,3 +1970,179 @@ class TestCOSObservability:
             from charms.loki_k8s.v1.loki_push_api import LogForwarder
 
             assert isinstance(mgr.charm._log_forwarder, LogForwarder)
+
+
+class TestIntrospectAction:
+    """Verify introspect action returns comprehensive report (US22)."""
+
+    def test_all_sections_returned(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+            storages=[ops.testing.Storage(name="data")],
+        )
+        ctx.run(ctx.on.action("introspect"), state)
+        results = ctx.action_results
+        assert "timestamp" in results
+        assert "unit" in results
+        from charm import REPORT_SECTIONS
+
+        for section in REPORT_SECTIONS:
+            assert section in results, f"Missing section: {section}"
+
+    def test_identity_section_accuracy(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "identity"}), state)
+        results = ctx.action_results
+        identity = json.loads(results["identity"])
+        assert "unit-name" in identity
+        assert "app-name" in identity
+        assert "model-name" in identity
+        assert "charm-uid" in identity
+
+    def test_config_section_with_changed_values(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            config={"calibration-string": "custom-value", "calibration-int": 9090},
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "config"}), state)
+        results = ctx.action_results
+        config = json.loads(results["config"])
+        assert config["calibration-string"] == "custom-value"
+        assert config["calibration-int"] == 9090
+
+    def test_containers_when_disconnected(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "containers"}), state)
+        results = ctx.action_results
+        containers = json.loads(results["containers"])
+        assert containers["norma"]["connected"] is False
+        assert containers["norma"]["status"] == "not-ready"
+
+    def test_relations_section_lists_endpoints(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "relations"}), state)
+        results = ctx.action_results
+        relations = json.loads(results["relations"])
+        assert "norma-peers" in relations
+
+    def test_section_filter_returns_only_requested(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "config,leadership"}), state)
+        results = ctx.action_results
+        assert "config" in results
+        assert "leadership" in results
+        # Should NOT include sections that weren't requested
+        assert "storage" not in results
+        assert "containers" not in results
+
+    def test_empty_filter_returns_all(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+            storages=[ops.testing.Storage(name="data")],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": ""}), state)
+        results = ctx.action_results
+        from charm import REPORT_SECTIONS
+
+        for section in REPORT_SECTIONS:
+            assert section in results
+
+    def test_invalid_section_silently_ignored(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "config,nonexistent"}), state)
+        results = ctx.action_results
+        assert "config" in results
+        assert "nonexistent" not in results
+
+    def test_non_leader_handling(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=False,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "leadership,secrets"}), state)
+        results = ctx.action_results
+        leadership = json.loads(results["leadership"])
+        assert leadership["is-leader"] is False
+        secrets = json.loads(results["secrets"])
+        assert secrets["has-secret"] is False

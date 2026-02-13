@@ -36,6 +36,19 @@ def _event_to_kebab(event: ops.EventBase) -> str:
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", name).lower()
 
 
+REPORT_SECTIONS = (
+    "identity",
+    "version",
+    "leadership",
+    "config",
+    "event-ledger",
+    "relations",
+    "storage",
+    "containers",
+    "secrets",
+)
+
+
 class NormaK8sCharm(ops.CharmBase):
     """Main charm class for norma-k8s calibration charm."""
 
@@ -122,6 +135,7 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.get_version_action, self._on_get_version_action)
         self.framework.observe(self.on.check_security_action, self._on_check_security_action)
         self.framework.observe(self.on.test_defer_action, self._on_test_defer_action)
+        self.framework.observe(self.on.introspect_action, self._on_introspect_action)
 
         # --- Pebble custom notice event → _on_defer_gate → _reconcile ---
         self.framework.observe(self.on.norma_pebble_custom_notice, self._on_defer_gate)
@@ -893,6 +907,166 @@ class NormaK8sCharm(ops.CharmBase):
                 "previous-state": str(previous).lower(),
             }
         )
+
+    # ------------------------------------------------------------------ #
+    #  US22: Introspect action + section collectors                       #
+    # ------------------------------------------------------------------ #
+
+    def _on_introspect_action(self, event: ops.ActionEvent) -> None:
+        """Return comprehensive structured report of all internal charm state."""
+        event.log("Collecting introspection report")
+
+        # Determine which sections to include
+        filter_str = event.params.get("sections", "")
+        if filter_str:
+            requested = {s.strip() for s in filter_str.split(",") if s.strip()}
+            sections = [s for s in REPORT_SECTIONS if s in requested]
+        else:
+            sections = list(REPORT_SECTIONS)
+
+        collectors = {
+            "identity": self._collect_identity,
+            "version": self._collect_version,
+            "leadership": self._collect_leadership,
+            "config": self._collect_config,
+            "event-ledger": self._collect_event_ledger,
+            "relations": self._collect_relations,
+            "storage": self._collect_storage,
+            "containers": self._collect_containers,
+            "secrets": self._collect_secrets,
+        }
+
+        report: dict[str, str] = {
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            "unit": self.unit.name,
+        }
+        for section in sections:
+            try:
+                report[section] = json.dumps(collectors[section]())
+            except Exception as e:
+                report[section] = json.dumps({"status": "unavailable", "reason": str(e)})
+
+        # Truncation: if total payload > 250KB, trim largest section
+        max_bytes = 250_000
+        total = sum(len(v) for v in report.values())
+        while total > max_bytes and sections:
+            largest = max(sections, key=lambda s: len(report.get(s, "")))
+            truncated = {"status": "truncated", "reason": "payload exceeded 250KB"}
+            report[largest] = json.dumps(truncated)
+            sections.remove(largest)
+            total = sum(len(v) for v in report.values())
+
+        event.set_results(report)
+
+    def _collect_identity(self) -> dict:
+        """Collect unit identity information."""
+        return {
+            "unit-name": self.unit.name,
+            "app-name": self.app.name,
+            "model-name": self.model.name,
+            "model-uuid": self.model.uuid,
+            "charm-uid": os.getuid(),
+            "charm-gid": os.getgid(),
+        }
+
+    def _collect_version(self) -> dict:
+        """Collect charm and workload version."""
+        return {
+            "charm-version": self._get_charm_version(),
+        }
+
+    def _collect_leadership(self) -> dict:
+        """Collect leadership status."""
+        return {
+            "is-leader": self.unit.is_leader(),
+        }
+
+    def _collect_config(self) -> dict:
+        """Collect current effective configuration."""
+        return {
+            "calibration-string": self.config.get("calibration-string", "default"),
+            "calibration-int": int(self.config.get("calibration-int", norma.DEFAULT_PORT)),
+            "calibration-float": float(self.config.get("calibration-float", 1.0)),
+            "calibration-bool": self.config.get("calibration-bool", True),
+            "calibration-secret": "set" if self.config.get("calibration-secret") else "unset",
+        }
+
+    def _collect_event_ledger(self) -> dict:
+        """Collect event ledger summary."""
+        return {
+            "count": len(self._event_ledger),
+            "events": self._event_ledger[-50:],  # last 50 for size control
+        }
+
+    def _collect_relations(self) -> dict:
+        """Collect relation metadata — only our own data, never remote databags.
+
+        Remote app/unit data may contain sensitive values (tokens, certs).
+        We only expose: relation id, remote unit names, and our own databags.
+        """
+        result: dict[str, list] = {}
+        for endpoint, relations in self.model.relations.items():
+            rel_list = []
+            for rel in relations:
+                rel_info: dict = {
+                    "id": rel.id,
+                    "our-app-data": dict(rel.data.get(self.app, {})),
+                    "our-unit-data": dict(rel.data.get(self.unit, {})),
+                    "remote-units": sorted(u.name for u in rel.units),
+                }
+                rel_list.append(rel_info)
+            if rel_list:
+                result[endpoint] = rel_list
+        return result
+
+    def _collect_storage(self) -> dict:
+        """Collect storage status."""
+        attached = bool(self.model.storages.get("data"))
+        result: dict = {
+            "attached": attached,
+            "mount-point": norma.STORAGE_PATH,
+        }
+        if attached:
+            container = self.unit.get_container(norma.CONTAINER_NAME)
+            marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+            if container.can_connect():
+                try:
+                    result["marker-exists"] = container.exists(marker_path)
+                except ops.pebble.ConnectionError:
+                    result["marker-exists"] = "unknown"
+            else:
+                result["marker-exists"] = "unknown"
+        return result
+
+    def _collect_containers(self) -> dict:
+        """Collect container connectivity status."""
+        result: dict[str, dict] = {}
+        for name in (norma.CONTAINER_NAME, norma.SECONDARY_CONTAINER):
+            container = self.unit.get_container(name)
+            connected = container.can_connect()
+            info: dict = {"connected": connected}
+            if connected:
+                try:
+                    plan = container.get_plan()
+                    info["services"] = list(plan.services.keys())
+                except ops.pebble.ConnectionError:
+                    info["services"] = []
+                    info["status"] = "connection-lost"
+            else:
+                info["status"] = "not-ready"
+            result[name] = info
+        return result
+
+    def _collect_secrets(self) -> dict:
+        """Collect secrets metadata (never exposes values)."""
+        peer = self.model.get_relation("norma-peers")
+        if not peer:
+            return {"status": "no-peer-relation"}
+        secret_id = peer.data[self.app].get("secret-id") if self.unit.is_leader() else None
+        return {
+            "secret-id": secret_id or "unavailable",
+            "has-secret": bool(secret_id),
+        }
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #
