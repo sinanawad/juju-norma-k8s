@@ -1205,6 +1205,224 @@ class TestHealthChecks:
         assert ctx.action_results["new-state"] == "unhealthy"
 
 
+class TestPebbleOps:
+    """US12: Pebble File Operations & Exec — test-pebble-ops action."""
+
+    def _norma_with_exec(self):
+        """Helper: norma container with layer, services, and exec mocks."""
+        return ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            layers={
+                "norma": ops.pebble.Layer(
+                    {
+                        "services": {
+                            "norma": {
+                                "override": "replace",
+                                "command": "/bin/norma",
+                                "startup": "enabled",
+                            }
+                        }
+                    }
+                )
+            },
+            service_statuses={"norma": ops.pebble.ServiceStatus.ACTIVE},
+            execs=frozenset(
+                {
+                    ops.testing.Exec(command_prefix=[norma.BINARY_PATH, "--check"]),
+                    ops.testing.Exec(command_prefix=["/nonexistent-binary"], return_code=127),
+                }
+            ),
+        )
+
+    def test_pebble_ops_all_pass(self):
+        """test-pebble-ops runs full suite and reports results."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = self._norma_with_exec()
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("test-pebble-ops"), state)
+        assert "summary" in ctx.action_results
+        assert "passed" in ctx.action_results["summary"]
+        assert ctx.action_results["push"] == "pass"
+        assert ctx.action_results["pull"] == "pass"
+        assert ctx.action_results["exists"] == "pass"
+
+    def test_pebble_ops_fails_disconnected(self):
+        """test-pebble-ops fails when container is disconnected."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(ctx.on.action("test-pebble-ops"), state)
+        assert "Cannot connect" in str(exc_info.value)
+
+    def test_pebble_ops_custom_container(self):
+        """test-pebble-ops works with custom container name."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        secondary = ops.testing.Container(
+            name="norma-secondary",
+            can_connect=True,
+            layers={
+                "norma-secondary": ops.pebble.Layer(
+                    {
+                        "services": {
+                            "norma-secondary": {
+                                "override": "replace",
+                                "command": "/bin/norma",
+                                "startup": "enabled",
+                            }
+                        }
+                    }
+                )
+            },
+            service_statuses={"norma-secondary": ops.pebble.ServiceStatus.ACTIVE},
+            execs=frozenset(
+                {
+                    ops.testing.Exec(command_prefix=[norma.BINARY_PATH, "--check"]),
+                    ops.testing.Exec(command_prefix=["/nonexistent-binary"], return_code=127),
+                }
+            ),
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, secondary],
+        )
+        ctx.run(ctx.on.action("test-pebble-ops", params={"container": "norma-secondary"}), state)
+        assert "summary" in ctx.action_results
+
+    def test_pebble_ops_summary_format(self):
+        """Summary format is 'N/M passed'."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = self._norma_with_exec()
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("test-pebble-ops"), state)
+        summary = ctx.action_results["summary"]
+        parts = summary.split("/")
+        assert len(parts) == 2
+        assert parts[1].endswith(" passed")
+
+
+class TestNotices:
+    """US13: Pebble Custom Notices — trigger-notice action and event handling."""
+
+    def test_custom_notice_logged_with_key(self):
+        """pebble-custom-notice event logs notice key in event ledger."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        notice = ops.testing.Notice(
+            key="canonical.com/norma/calibration-test",
+        )
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            notices=[notice],
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        with ctx(ctx.on.pebble_custom_notice(norma_c, notice=notice), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            notice_events = [e for e in ledger if e["event_name"] == "pebble-custom-notice"]
+            assert len(notice_events) == 1
+            expected_key = "canonical.com/norma/calibration-test"
+            assert notice_events[0]["extra"]["notice-key"] == expected_key
+
+    def test_trigger_notice_action_sends_notice(self):
+        """trigger-notice action executes pebble notify command."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            execs=frozenset(
+                {
+                    ops.testing.Exec(
+                        command_prefix=[
+                            "/usr/bin/pebble",
+                            "notify",
+                            "canonical.com/norma/calibration-test",
+                        ]
+                    ),
+                }
+            ),
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("trigger-notice"), state)
+        assert ctx.action_results["notice-sent"] == "true"
+        assert ctx.action_results["key"] == "canonical.com/norma/calibration-test"
+
+    def test_trigger_notice_fails_disconnected(self):
+        """trigger-notice fails when container is disconnected."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(ctx.on.action("trigger-notice"), state)
+        assert "Cannot connect" in str(exc_info.value)
+
+    def test_trigger_notice_with_data(self):
+        """trigger-notice passes data as key=value args to pebble notify."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+            execs=frozenset(
+                {
+                    ops.testing.Exec(
+                        command_prefix=[
+                            "/usr/bin/pebble",
+                            "notify",
+                            "canonical.com/norma/test",
+                            "foo=bar",
+                        ]
+                    ),
+                }
+            ),
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(
+            ctx.on.action(
+                "trigger-notice",
+                params={"key": "canonical.com/norma/test", "data": '{"foo": "bar"}'},
+            ),
+            state,
+        )
+        assert ctx.action_results["notice-sent"] == "true"
+        assert ctx.action_results["key"] == "canonical.com/norma/test"
+
+    def test_trigger_notice_invalid_json_fails(self):
+        """trigger-notice fails cleanly on invalid JSON data."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(name="norma", can_connect=True)
+        state = ops.testing.State(containers=[norma_c, NORMA_SECONDARY])
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(
+                ctx.on.action("trigger-notice", params={"data": "not-json"}),
+                state,
+            )
+        assert "Invalid JSON" in str(exc_info.value)
+
+    def test_trigger_notice_non_dict_data_fails(self):
+        """trigger-notice fails cleanly when data is a JSON list, not object."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(name="norma", can_connect=True)
+        state = ops.testing.State(containers=[norma_c, NORMA_SECONDARY])
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(
+                ctx.on.action("trigger-notice", params={"data": "[1,2,3]"}),
+                state,
+            )
+        assert "JSON object" in str(exc_info.value)
+
+
 class TestSecrets:
     """US9: Juju Secrets — create, rotate, expire, remove, grant/revoke."""
 

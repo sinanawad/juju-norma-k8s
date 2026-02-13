@@ -8,6 +8,7 @@ This charm follows the holistic reconciler architecture: all lifecycle events
 route to a single _reconcile() method. Action handlers are dedicated.
 """
 
+import contextlib
 import datetime
 import json
 import logging
@@ -111,6 +112,11 @@ class NormaK8sCharm(ops.CharmBase):
         self.framework.observe(self.on.get_secret_info_action, self._on_get_secret_info_action)
         self.framework.observe(self.on.check_storage_action, self._on_check_storage_action)
         self.framework.observe(self.on.toggle_health_action, self._on_toggle_health_action)
+        self.framework.observe(self.on.test_pebble_ops_action, self._on_test_pebble_ops_action)
+        self.framework.observe(self.on.trigger_notice_action, self._on_trigger_notice_action)
+
+        # --- Pebble custom notice event → _reconcile ---
+        self.framework.observe(self.on.norma_pebble_custom_notice, self._reconcile)
 
     # ------------------------------------------------------------------ #
     #  Core reconciler                                                    #
@@ -132,6 +138,11 @@ class NormaK8sCharm(ops.CharmBase):
         # Capture check name for pebble-check-failed/recovered events
         if isinstance(event, (ops.PebbleCheckFailedEvent, ops.PebbleCheckRecoveredEvent)):
             extra["check"] = event.info.name
+
+        # Capture notice key for pebble-custom-notice events
+        if isinstance(event, ops.PebbleCustomNoticeEvent):
+            extra["notice-key"] = event.notice.key
+            extra["notice-data"] = str(event.notice.last_data)
 
         self._log_event(event_name, extra)
 
@@ -538,6 +549,151 @@ class NormaK8sCharm(ops.CharmBase):
                 event.set_results({"previous-state": "healthy", "new-state": "unhealthy"})
         except ops.pebble.ConnectionError:
             event.fail(f"Lost connection to container {container_name}")
+
+    def _on_test_pebble_ops_action(self, event: ops.ActionEvent) -> None:
+        """Run the full Pebble file/exec/service operations suite."""
+        event.log("Running Pebble operations suite")
+        container_name = event.params.get("container", norma.CONTAINER_NAME)
+        container = self.unit.get_container(container_name)
+
+        if not container.can_connect():
+            event.fail(f"Cannot connect to container {container_name}")
+            return
+
+        results: dict[str, str] = {}
+        passed = 0
+        total = 0
+
+        def _run_op(name: str, fn) -> None:
+            nonlocal passed, total
+            total += 1
+            try:
+                fn()
+                results[name] = "pass"
+                passed += 1
+            except (
+                ops.pebble.ConnectionError,
+                ops.pebble.PathError,
+                ops.pebble.APIError,
+                ops.pebble.ChangeError,
+                ops.pebble.ExecError,
+                AssertionError,
+            ) as e:
+                results[name] = f"fail: {e}"
+
+        test_path = "/tmp/norma-pebble-test.txt"
+        test_dir = "/tmp/norma-pebble-test-dir/nested"
+        test_content = "pebble-ops-test-data"
+
+        # --- File operations ---
+        def op_push():
+            container.push(test_path, test_content, make_dirs=True)
+
+        def op_pull():
+            content = container.pull(test_path).read()
+            assert content == test_content, f"Expected {test_content!r}, got {content!r}"
+
+        def op_make_dir():
+            container.make_dir(test_dir, make_parents=True)
+
+        def op_list_files():
+            files = container.list_files("/tmp")
+            names = [f.name for f in files]
+            assert "norma-pebble-test.txt" in names
+
+        def op_exec():
+            proc = container.exec([norma.BINARY_PATH, "--check"])
+            proc.wait()
+
+        def op_exec_fail():
+            try:
+                proc = container.exec(["/nonexistent-binary"])
+                proc.wait()
+                raise AssertionError("Expected error from failing command")
+            except (ops.pebble.ExecError, ops.pebble.APIError, ops.pebble.ChangeError):
+                pass  # Expected — binary not found or non-zero exit
+
+        def op_remove_path():
+            container.remove_path(test_path)
+            assert not container.exists(test_path)
+
+        def op_exists():
+            # Push a temp file, verify exists, then clean up
+            container.push("/tmp/norma-exists-test", "x", make_dirs=True)
+            assert container.exists("/tmp/norma-exists-test")
+            container.remove_path("/tmp/norma-exists-test")
+
+        # --- Service operations ---
+        service_name = container_name
+
+        def op_stop():
+            container.stop(service_name)
+
+        def op_get_services():
+            svcs = container.get_services()
+            assert service_name in svcs
+
+        def op_start():
+            container.start(service_name)
+
+        def op_restart():
+            container.restart(service_name)
+
+        def op_get_plan():
+            plan = container.get_plan()
+            assert service_name in plan.services
+
+        _run_op("push", op_push)
+        _run_op("pull", op_pull)
+        _run_op("make-dir", op_make_dir)
+        _run_op("list-files", op_list_files)
+        _run_op("exec", op_exec)
+        _run_op("exec-fail", op_exec_fail)
+        _run_op("remove-path", op_remove_path)
+        _run_op("exists", op_exists)
+        _run_op("stop", op_stop)
+        _run_op("get-services", op_get_services)
+        _run_op("start", op_start)
+        _run_op("restart", op_restart)
+        _run_op("get-plan", op_get_plan)
+
+        # Cleanup test dir
+        with contextlib.suppress(ops.pebble.PathError):
+            container.remove_path("/tmp/norma-pebble-test-dir", recursive=True)
+
+        results["summary"] = f"{passed}/{total} passed"
+        event.set_results(results)
+
+    def _on_trigger_notice_action(self, event: ops.ActionEvent) -> None:
+        """Send a Pebble custom notice from inside the workload container."""
+        event.log("Triggering custom notice")
+        container = self.unit.get_container(norma.CONTAINER_NAME)
+
+        if not container.can_connect():
+            event.fail("Cannot connect to container")
+            return
+
+        key = event.params.get("key", "canonical.com/norma/calibration-test")
+        data = event.params.get("data", "{}")
+
+        try:
+            data_dict = json.loads(data)
+        except json.JSONDecodeError as e:
+            event.fail(f"Invalid JSON in data parameter: {e}")
+            return
+        if not isinstance(data_dict, dict):
+            event.fail(f"data must be a JSON object, got {type(data_dict).__name__}")
+            return
+
+        try:
+            cmd = ["/usr/bin/pebble", "notify", key]
+            for k, v in data_dict.items():
+                cmd.append(f"{k}={v}")
+            process = container.exec(cmd)
+            process.wait()
+            event.set_results({"notice-sent": "true", "key": key})
+        except (ops.pebble.ExecError, ops.pebble.ConnectionError) as e:
+            event.fail(f"Failed to send notice: {e}")
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                            #
