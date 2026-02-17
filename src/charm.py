@@ -105,6 +105,8 @@ class NormaK8sCharm(ops.CharmBase):
         # --- Storage events → _on_defer_gate → _reconcile ---
         self.framework.observe(self.on.data_storage_attached, self._on_defer_gate)
         self.framework.observe(self.on.data_storage_detaching, self._on_defer_gate)
+        self.framework.observe(self.on.logs_storage_attached, self._on_defer_gate)
+        self.framework.observe(self.on.logs_storage_detaching, self._on_defer_gate)
 
         # --- Dedicated handlers (permitted by constitution) ---
         self.framework.observe(self.on.stop, self._on_stop)
@@ -305,26 +307,31 @@ class NormaK8sCharm(ops.CharmBase):
                     # Open workload port
                     self.unit.set_ports(ops.Port("tcp", port))
 
-                    # Write storage marker
-                    if self.model.storages.get("data"):
-                        marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
-                        try:
-                            if not container.exists(marker_path):
-                                marker = json.dumps(
-                                    {
-                                        "created_by": self.unit.name,
-                                        "created_at": datetime.datetime.now(
-                                            datetime.UTC
-                                        ).isoformat(),
-                                        "revision": 1,
-                                    }
+                    # Write storage markers
+                    for s_name, s_cfg in norma.STORAGE_CONFIG.items():
+                        if self.model.storages.get(s_name):
+                            s_marker = f"{s_cfg['path']}/{s_cfg['marker']}"
+                            try:
+                                if not container.exists(s_marker):
+                                    marker = json.dumps(
+                                        {
+                                            "created_by": self.unit.name,
+                                            "created_at": datetime.datetime.now(
+                                                datetime.UTC
+                                            ).isoformat(),
+                                            "storage": s_name,
+                                            "revision": 1,
+                                        }
+                                    )
+                                    container.push(s_marker, marker, make_dirs=True)
+                            except (
+                                ops.pebble.ConnectionError,
+                                ops.pebble.PathError,
+                            ):
+                                logger.debug(
+                                    "Storage marker write skipped for %s",
+                                    s_name,
                                 )
-                                container.push(marker_path, marker, make_dirs=True)
-                        except (
-                            ops.pebble.ConnectionError,
-                            ops.pebble.PathError,
-                        ):
-                            logger.debug("Storage marker write skipped")
 
                     # Only clear forced status when layer apply succeeded
                     if layer_ok:
@@ -568,11 +575,18 @@ class NormaK8sCharm(ops.CharmBase):
 
     def _on_check_storage_action(self, event: ops.ActionEvent) -> None:
         """Check storage status and data integrity."""
-        event.log("Checking storage status")
-        container = self.unit.get_container(norma.CONTAINER_NAME)
-        marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
+        storage_name = event.params.get("name", "data")
+        storage_cfg = norma.STORAGE_CONFIG.get(storage_name)
+        if not storage_cfg:
+            event.fail(f"Unknown storage name: {storage_name}")
+            return
 
-        attached = bool(self.model.storages.get("data"))
+        event.log(f"Checking storage '{storage_name}'")
+        container = self.unit.get_container(norma.CONTAINER_NAME)
+        storage_path = storage_cfg["path"]
+        marker_path = f"{storage_path}/{storage_cfg['marker']}"
+
+        attached = bool(self.model.storages.get(storage_name))
         can_connect = container.can_connect()
 
         # Check marker file
@@ -589,7 +603,7 @@ class NormaK8sCharm(ops.CharmBase):
         # Test writability
         writable = False
         if attached and can_connect:
-            test_path = f"{norma.STORAGE_PATH}/.write-test"
+            test_path = f"{storage_path}/.write-test"
             try:
                 container.push(test_path, "test", make_dirs=True)
                 container.remove_path(test_path)
@@ -600,7 +614,7 @@ class NormaK8sCharm(ops.CharmBase):
         event.set_results(
             {
                 "attached": str(attached).lower(),
-                "mount-point": norma.STORAGE_PATH,
+                "mount-point": storage_path,
                 "marker-exists": str(marker_exists).lower(),
                 "marker-content": marker_content,
                 "writable": str(writable).lower(),
@@ -1020,22 +1034,25 @@ class NormaK8sCharm(ops.CharmBase):
         return result
 
     def _collect_storage(self) -> dict:
-        """Collect storage status."""
-        attached = bool(self.model.storages.get("data"))
-        result: dict = {
-            "attached": attached,
-            "mount-point": norma.STORAGE_PATH,
-        }
-        if attached:
-            container = self.unit.get_container(norma.CONTAINER_NAME)
-            marker_path = f"{norma.STORAGE_PATH}/{norma.MARKER_FILE}"
-            if container.can_connect():
+        """Collect storage status for all declared storages."""
+        container = self.unit.get_container(norma.CONTAINER_NAME)
+        can_connect = container.can_connect()
+        result: dict = {}
+        for s_name, s_cfg in norma.STORAGE_CONFIG.items():
+            attached = bool(self.model.storages.get(s_name))
+            info: dict = {
+                "attached": attached,
+                "mount-point": s_cfg["path"],
+            }
+            if attached and can_connect:
+                marker_path = f"{s_cfg['path']}/{s_cfg['marker']}"
                 try:
-                    result["marker-exists"] = container.exists(marker_path)
+                    info["marker-exists"] = container.exists(marker_path)
                 except ops.pebble.ConnectionError:
-                    result["marker-exists"] = "unknown"
-            else:
-                result["marker-exists"] = "unknown"
+                    info["marker-exists"] = "unknown"
+            elif attached:
+                info["marker-exists"] = "unknown"
+            result[s_name] = info
         return result
 
     def _collect_containers(self) -> dict:

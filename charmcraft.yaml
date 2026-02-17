@@ -10,6 +10,7 @@ description: |
 base: ubuntu@24.04
 platforms:
   amd64:
+  arm64:
 
 parts:
   norma-charm:
@@ -33,6 +34,8 @@ containers:
     mounts:
       - storage: data
         location: /var/lib/norma
+      - storage: logs
+        location: /var/log/norma
   norma-secondary:
     resource: juju-norma-image
     uid: 584792
@@ -48,6 +51,10 @@ storage:
   data:
     type: filesystem
     minimum-size: 1G
+  logs:
+    type: filesystem
+    minimum-size: 512M
+    multiple-range: 0-1
 
 config:
   options:
@@ -114,6 +121,11 @@ actions:
     description: Return info about the app-owned secret
   check-storage:
     description: Check storage status and data integrity
+    params:
+      name:
+        type: string
+        description: "Storage name to check: data or logs"
+        default: data
   test-pebble-ops:
     description: Run full Pebble file/exec/service operation suite
     params:

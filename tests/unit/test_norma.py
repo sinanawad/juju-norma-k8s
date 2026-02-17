@@ -39,6 +39,18 @@ class TestConstants:
     def test_marker_file(self):
         assert norma.MARKER_FILE == "calibration-marker.json"
 
+    def test_logs_storage_path(self):
+        assert norma.LOGS_STORAGE_PATH == "/var/log/norma"
+
+    def test_logs_marker_file(self):
+        assert norma.LOGS_MARKER_FILE == "logs-marker.json"
+
+    def test_storage_config_keys(self):
+        assert "data" in norma.STORAGE_CONFIG
+        assert "logs" in norma.STORAGE_CONFIG
+        assert norma.STORAGE_CONFIG["data"]["path"] == norma.STORAGE_PATH
+        assert norma.STORAGE_CONFIG["logs"]["path"] == norma.LOGS_STORAGE_PATH
+
     def test_binary_path(self):
         assert norma.BINARY_PATH == "/bin/norma"
 

@@ -14,6 +14,7 @@ license: Apache-2.0
 
 platforms:
   amd64:
+  arm64:
 
 run_user: _daemon_
 
@@ -44,6 +45,7 @@ parts:
       - osusergo
       - netgo
     override-build: |
+      export GOARCH=${CRAFT_ARCH_BUILD_FOR:-amd64}
       go build -o ${CRAFT_PART_INSTALL}/bin/norma -tags "osusergo,netgo" -ldflags="-s -w -X main.version=0.1.0" ./...
     stage:
       - bin/norma

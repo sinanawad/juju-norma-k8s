@@ -1084,6 +1084,143 @@ class TestStorage:
         assert ctx.action_results["writable"] == "false"
 
 
+class TestMultipleStorage:
+    """US24: Multiple Storage Definitions — data (required) + logs (optional)."""
+
+    def test_check_storage_name_data(self):
+        """check-storage with name=data works as before."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="data")
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        ctx.run(ctx.on.action("check-storage", params={"name": "data"}), state)
+        assert ctx.action_results["attached"] == "true"
+        assert ctx.action_results["mount-point"] == norma.STORAGE_PATH
+        assert ctx.action_results["writable"] == "true"
+
+    def test_check_storage_name_logs_attached(self):
+        """check-storage with name=logs reports available when logs storage attached."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        data_storage = ops.testing.Storage(name="data")
+        logs_storage = ops.testing.Storage(name="logs")
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+            storages=[data_storage, logs_storage],
+        )
+        ctx.run(ctx.on.action("check-storage", params={"name": "logs"}), state)
+        assert ctx.action_results["attached"] == "true"
+        assert ctx.action_results["mount-point"] == norma.LOGS_STORAGE_PATH
+        assert ctx.action_results["writable"] == "true"
+
+    def test_check_storage_name_logs_not_attached(self):
+        """check-storage with name=logs reports unavailable when not attached."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        data_storage = ops.testing.Storage(name="data")
+        norma_c = ops.testing.Container(
+            name="norma",
+            can_connect=True,
+        )
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+            storages=[data_storage],
+        )
+        ctx.run(ctx.on.action("check-storage", params={"name": "logs"}), state)
+        assert ctx.action_results["attached"] == "false"
+        assert ctx.action_results["mount-point"] == norma.LOGS_STORAGE_PATH
+        assert ctx.action_results["writable"] == "false"
+
+    def test_check_storage_unknown_name_fails(self):
+        """check-storage with unknown name fails the action."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        with pytest.raises(ops.testing.ActionFailed) as exc_info:
+            ctx.run(ctx.on.action("check-storage", params={"name": "unknown"}), state)
+        assert "Unknown storage name" in exc_info.value.message
+
+    def test_logs_storage_attached_fires_reconcile(self):
+        """logs storage-attached routes through the reconciler."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="logs")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        ctx.run(ctx.on.storage_attached(storage), state)
+
+    def test_logs_storage_detaching_fires_reconcile(self):
+        """logs storage-detaching routes through the reconciler and is logged."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        storage = ops.testing.Storage(name="logs")
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
+            storages=[storage],
+        )
+        with ctx(ctx.on.storage_detaching(storage), state) as mgr:
+            mgr.run()
+            ledger = mgr.charm._event_ledger
+            event_names = [e["event_name"] for e in ledger]
+            assert "storage-detaching" in event_names
+
+    def test_introspect_lists_both_storages(self):
+        """introspect storage section lists both data and logs."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        data_storage = ops.testing.Storage(name="data")
+        logs_storage = ops.testing.Storage(name="logs")
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+            storages=[data_storage, logs_storage],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "storage"}), state)
+        storage_data = json.loads(ctx.action_results["storage"])
+        assert "data" in storage_data
+        assert "logs" in storage_data
+        assert storage_data["data"]["attached"] is True
+        assert storage_data["data"]["mount-point"] == norma.STORAGE_PATH
+        assert storage_data["logs"]["attached"] is True
+        assert storage_data["logs"]["mount-point"] == norma.LOGS_STORAGE_PATH
+
+    def test_introspect_logs_not_attached(self):
+        """introspect storage section shows logs as not attached when absent."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        data_storage = ops.testing.Storage(name="data")
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+            storages=[data_storage],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "storage"}), state)
+        storage_data = json.loads(ctx.action_results["storage"])
+        assert "data" in storage_data
+        assert "logs" in storage_data
+        assert storage_data["data"]["attached"] is True
+        assert storage_data["logs"]["attached"] is False
+
+
 class TestHealthChecks:
     """US11: Pebble Health Checks — check-failed/recovered events and toggle-health action."""
 

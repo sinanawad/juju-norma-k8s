@@ -17,6 +17,13 @@ SECONDARY_PORT = 8081
 HEALTH_FLAG_FILE = "/var/lib/norma/norma-unhealthy"
 STORAGE_PATH = "/var/lib/norma"
 MARKER_FILE = "calibration-marker.json"
+LOGS_STORAGE_PATH = "/var/log/norma"
+LOGS_MARKER_FILE = "logs-marker.json"
+
+STORAGE_CONFIG = {
+    "data": {"path": STORAGE_PATH, "marker": MARKER_FILE},
+    "logs": {"path": LOGS_STORAGE_PATH, "marker": LOGS_MARKER_FILE},
+}
 BINARY_PATH = "/bin/norma"
 LEDGER_FILE = "/tmp/norma-event-ledger.json"
 DEFER_FLAG_FILE = "/tmp/norma-defer-armed"
