@@ -54,7 +54,7 @@ def install_snap(name: str, channel: str, *, classic: bool = True) -> None:
 
 def ensure_microk8s(channel: str = "1.28/stable") -> None:
     """Install microk8s and enable required addons."""
-    install_snap("microk8s", channel, classic=True)
+    install_snap("microk8s", channel, classic=False)
     _run(["sudo", "microk8s", "status", "--wait-ready"], timeout=SNAP_TIMEOUT)
     for addon in ("dns", "hostpath-storage", "registry"):
         _run(["sudo", "microk8s", "enable", addon], timeout=SNAP_TIMEOUT)
