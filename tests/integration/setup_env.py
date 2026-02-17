@@ -87,22 +87,24 @@ def _register_microk8s_cloud(juju_cli: str = "juju") -> None:
     Uses ``sudo microk8s config`` piped into ``juju add-k8s`` so juju
     only needs the kubeconfig, not direct microk8s snap access.
     """
-    # Check if cloud already registered.
+    # "microk8s" is a built-in cloud name; use a distinct name.
+    cloud_name = "mk8s"
     result = _run([juju_cli, "clouds", "--format", "json"], check=False)
-    if result.returncode == 0 and "microk8s" in result.stdout:
-        logger.info("microk8s cloud already registered")
-        return
+    if result.returncode == 0 and cloud_name in result.stdout:
+        logger.info("%s cloud already registered", cloud_name)
+        return cloud_name
     # Pipe kubeconfig from sudo microk8s config into juju add-k8s.
     config = _run(["sudo", "microk8s", "config"], timeout=SNAP_TIMEOUT)
     proc = subprocess.run(
-        [juju_cli, "add-k8s", "microk8s", "--client"],
+        [juju_cli, "add-k8s", cloud_name, "--client"],
         input=config.stdout,
         capture_output=True,
         text=True,
         timeout=120,
         check=True,
     )
-    logger.info("microk8s cloud registered: %s", proc.stdout.strip())
+    logger.info("%s cloud registered: %s", cloud_name, proc.stdout.strip())
+    return cloud_name
 
 
 def bootstrap_controller(
@@ -113,9 +115,9 @@ def bootstrap_controller(
     if is_controller_bootstrapped(controller, juju_cli):
         logger.info("controller %s already bootstrapped", controller)
         return
-    _register_microk8s_cloud(juju_cli)
+    cloud_name = _register_microk8s_cloud(juju_cli)
     _run(
-        [juju_cli, "bootstrap", "microk8s", controller],
+        [juju_cli, "bootstrap", cloud_name, controller],
         timeout=BOOTSTRAP_TIMEOUT,
     )
     logger.info("controller %s bootstrapped", controller)
