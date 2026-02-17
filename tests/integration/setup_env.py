@@ -52,7 +52,7 @@ def install_snap(name: str, channel: str, *, classic: bool = True) -> None:
 # ------------------------------------------------------------------
 
 
-def ensure_microk8s(channel: str = "1.28/stable") -> None:
+def ensure_microk8s(channel: str = "1.28-strict/stable") -> None:
     """Install microk8s and enable required addons."""
     install_snap("microk8s", channel, classic=False)
     _run(["sudo", "microk8s", "status", "--wait-ready"], timeout=SNAP_TIMEOUT)
@@ -106,7 +106,7 @@ def check_prerequisites(juju_cli: str = "juju") -> list[str]:
 def ensure_environment(
     *,
     juju_channel: str = "3.6/stable",
-    microk8s_channel: str = "1.28/stable",
+    microk8s_channel: str = "1.28-strict/stable",
     controller: str = "microk8s-localhost",
     juju_cli: str = "juju",
 ) -> str:
