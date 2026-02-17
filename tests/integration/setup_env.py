@@ -13,7 +13,7 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 SNAP_TIMEOUT = 300  # seconds
-BOOTSTRAP_TIMEOUT = 600
+BOOTSTRAP_TIMEOUT = 900  # CI runners are slow; bootstrap pulls controller images
 
 
 class SetupError(Exception):
