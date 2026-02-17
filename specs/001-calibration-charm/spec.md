@@ -679,6 +679,13 @@ check-storage output, then detach `logs` and verify `data` persists.
 - **FR-025**: The OCI image MUST be built for at least amd64 and arm64 architectures. The charmcraft.yaml MUST declare both platforms so that the charm can be deployed on either architecture.
 - **FR-026**: The charm MUST declare at least two named filesystem storages: `data` (required, mounted at `/var/lib/norma`) and `logs` (optional, mounted at `/var/log/norma`). The `check-storage` action MUST accept a `name` parameter to query any declared storage independently.
 
+### Non-Functional Requirements
+
+- **NFR-001**: Integration tests MUST be self-contained -- running `SETUP_ENVIRONMENT=1 make integration` on a fresh Ubuntu 24.04 machine MUST install all prerequisites (microk8s, juju, controller bootstrap) and execute the full test suite without manual intervention.
+- **NFR-002**: Integration tests MUST support testing against multiple Juju versions via the `JUJU_CHANNEL` environment variable (e.g., `3/stable`, `4/stable`).
+- **NFR-003**: Integration test environment setup MUST be idempotent -- safe to re-run on an already-configured machine with no side effects.
+- **NFR-004**: Integration tests MUST support reusing an existing deployment via `JUJU_MODEL` for fast local iteration, or creating a fresh temporary model for CI isolation.
+
 ### Key Entities
 
 - **Event Ledger**: An ordered log of all observed Juju events with timestamp, event name, and unit identity. Persisted to the charm container filesystem to survive across event dispatches; resets on pod restart (by design, since it tests event firing, not long-term persistence). Queryable via action.
@@ -692,7 +699,9 @@ check-storage output, then detach `logs` and verify `data` persists.
 - The OCI image for the workload container is a chiselled ROCK containing a purpose-built Go binary (single static executable, no runtime dependencies), source in `workload/`, built via rockcraft as part of this repo's CI. Multi-arch builds (amd64 + arm64) require cross-compilation support in CI (Go's `GOARCH` env var).
 - Cross-model relation testing requires access to two Juju models on the same controller.
 - COS integration testing requires the Prometheus, Grafana, and Loki charms to be available.
-- The charm name follows the convention `norma-k8s` per the project constitution.
+- The charm name is `juju-norma-k8s`.
+- Integration test environment preparation is opt-in via `SETUP_ENVIRONMENT=1`. Without it, tests skip gracefully if prerequisites are missing.
+- CI runs integration tests against both Juju 3.x (`3/stable`) and Juju 4.x (`4/stable`) channels via matrix strategy.
 
 ## Success Criteria *(mandatory)*
 
@@ -704,5 +713,5 @@ check-storage output, then detach `logs` and verify `data` persists.
 - **SC-004**: Scaling from 1 to 3 units completes with all units active within 180 seconds.
 - **SC-005**: The charm's event ledger correctly records 100% of expected lifecycle events in the correct order.
 - **SC-006**: All actions return results within 30 seconds of invocation.
-- **SC-007**: The charm passes lint (ruff), unit tests (ops.testing), and integration tests (jubilant) in CI.
+- **SC-007**: The charm passes lint (ruff), unit tests (ops.testing), and integration tests (jubilant) in CI, across both Juju 3.x and 4.x versions.
 - **SC-008**: The charm runs entirely as non-root (both charm process and workload) with no privilege escalation required.

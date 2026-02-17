@@ -5,6 +5,7 @@ on:
     branches: [main, "001-*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -56,30 +57,27 @@ jobs:
           path: "*.charm"
 
   integration:
-    name: Integration Tests
+    name: Integration (${{ matrix.juju-channel }})
     runs-on: ubuntu-24.04
     needs: [unit, pack]
     if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        juju-channel: ["3.6/stable", "4/stable"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - name: Setup MicroK8s
-        run: |
-          sudo snap install microk8s --classic
-          sudo microk8s enable dns storage registry
-          sudo microk8s status --wait-ready
-      - name: Setup Juju
-        run: |
-          sudo snap install juju --classic
-          juju bootstrap microk8s test-controller
-          juju add-model test-model
+      - uses: actions/download-artifact@v4
+        with:
+          name: charm
       - run: uv sync --extra dev
-      - name: Pack charm
-        run: |
-          sudo snap install charmcraft --classic
-          charmcraft pack
       - run: make integration
+        timeout-minutes: 25
         env:
+          SETUP_ENVIRONMENT: "1"
+          JUJU_CHANNEL: ${{ matrix.juju-channel }}
           CHARM_PATH: ${{ github.workspace }}
