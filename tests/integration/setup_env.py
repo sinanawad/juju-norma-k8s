@@ -75,6 +75,17 @@ def ensure_microk8s(channel: str = "1.28-strict/stable") -> None:
 # ------------------------------------------------------------------
 
 
+def _connect_juju_microk8s() -> None:
+    """Connect the juju:microk8s snap interface to microk8s:microk8s.
+
+    Strictly confined juju discovers microk8s credentials through the
+    ``microk8s`` content interface.  This connection is the supported way
+    to grant juju access without group-membership tricks.
+    """
+    _run(["sudo", "snap", "connect", "juju:microk8s", "microk8s:microk8s"])
+    logger.info("snap interface juju:microk8s connected")
+
+
 def is_controller_bootstrapped(controller: str, juju_cli: str = "juju") -> bool:
     """Return True if *controller* already exists."""
     result = _run([juju_cli, "show-controller", controller], check=False)
@@ -85,16 +96,13 @@ def bootstrap_controller(
     controller: str = "microk8s-localhost",
     juju_cli: str = "juju",
 ) -> None:
-    """Bootstrap a Juju controller on microk8s if it does not exist.
-
-    Uses ``sg snap_microk8s`` so the juju process can read the strictly
-    confined microk8s credentials without requiring a re-login.
-    """
+    """Bootstrap a Juju controller on microk8s if it does not exist."""
     if is_controller_bootstrapped(controller, juju_cli):
         logger.info("controller %s already bootstrapped", controller)
         return
+    _connect_juju_microk8s()
     _run(
-        ["sg", "snap_microk8s", "-c", f"{juju_cli} bootstrap microk8s {controller}"],
+        [juju_cli, "bootstrap", "microk8s", controller],
         timeout=BOOTSTRAP_TIMEOUT,
     )
     logger.info("controller %s bootstrapped", controller)
