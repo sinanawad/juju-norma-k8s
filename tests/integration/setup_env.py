@@ -60,7 +60,7 @@ def _ensure_microk8s_group() -> None:
     logger.info("added %s to snap_microk8s group", user)
 
 
-def ensure_microk8s(channel: str = "1.33-strict/stable") -> None:
+def ensure_microk8s(channel: str = "1.34-strict/stable") -> None:
     """Install microk8s and enable required addons."""
     install_snap("microk8s", channel, classic=False)
     _ensure_microk8s_group()
@@ -146,7 +146,7 @@ def check_prerequisites(juju_cli: str = "juju") -> list[str]:
 def ensure_environment(
     *,
     juju_channel: str = "3.6/stable",
-    microk8s_channel: str = "1.33-strict/stable",
+    microk8s_channel: str = "1.34-strict/stable",
     controller: str = "microk8s-localhost",
     juju_cli: str = "juju",
 ) -> str:

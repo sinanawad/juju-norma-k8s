@@ -16,7 +16,7 @@ Usage modes:
 Environment variables:
     SETUP_ENVIRONMENT   Set to "1" to auto-install snaps + bootstrap controller.
     JUJU_CHANNEL        Juju snap channel (default: "3.6/stable").
-    MICROK8S_CHANNEL    microk8s snap channel (default: "1.33-strict/stable").
+    MICROK8S_CHANNEL    microk8s snap channel (default: "1.34-strict/stable").
     JUJU_CLI            Path to juju binary (default: "juju").
     JUJU_MODEL          Reuse an existing model (skip deploy).
     JUJU_CONTROLLER     Controller name (default: "microk8s-localhost").
@@ -67,7 +67,7 @@ def environment_ready():
         try:
             ensure_environment(
                 juju_channel=_env("JUJU_CHANNEL", "3.6/stable"),
-                microk8s_channel=_env("MICROK8S_CHANNEL", "1.33-strict/stable"),
+                microk8s_channel=_env("MICROK8S_CHANNEL", "1.34-strict/stable"),
                 controller=controller,
                 juju_cli=juju_cli,
             )
