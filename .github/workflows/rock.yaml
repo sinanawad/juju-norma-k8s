@@ -1,0 +1,45 @@
+name: ROCK
+
+on:
+  push:
+    branches: [main, "001-*"]
+    paths:
+      - "workload/**"
+      - "rockcraft.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "workload/**"
+      - "rockcraft.yaml"
+
+jobs:
+  go-test:
+    name: Go Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: workload/go.sum
+      - name: Build
+        working-directory: workload
+        run: CGO_ENABLED=0 go build -o norma ./...
+      - name: Test
+        working-directory: workload
+        run: go test -v ./...
+
+  rock-pack:
+    name: Pack ROCK
+    runs-on: ubuntu-24.04
+    needs: go-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rockcraft
+        run: sudo snap install rockcraft --classic
+      - run: rockcraft pack
+      - name: Upload ROCK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rock
+          path: "*.rock"

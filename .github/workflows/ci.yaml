@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "001-*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev
+      - run: make lint
+
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev
+      - run: make unit
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: .coverage
+
+  pack:
+    name: Pack Charm
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+      - run: charmcraft fetch-libs
+      - run: charmcraft pack
+      - name: Upload charm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: charm
+          path: "*.charm"
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-24.04
+    needs: [unit, pack]
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Setup MicroK8s
+        run: |
+          sudo snap install microk8s --classic
+          sudo microk8s enable dns storage registry
+          sudo microk8s status --wait-ready
+      - name: Setup Juju
+        run: |
+          sudo snap install juju --classic
+          juju bootstrap microk8s test-controller
+          juju add-model test-model
+      - run: uv sync --dev
+      - name: Pack charm
+        run: |
+          sudo snap install charmcraft --classic
+          charmcraft pack
+      - run: make integration
+        env:
+          CHARM_PATH: ${{ github.workspace }}
