@@ -6,6 +6,7 @@ pytest or jubilant dependency so it can also be used as a standalone
 script.
 """
 
+import getpass
 import logging
 import subprocess
 
@@ -52,9 +53,17 @@ def install_snap(name: str, channel: str, *, classic: bool = True) -> None:
 # ------------------------------------------------------------------
 
 
+def _ensure_microk8s_group() -> None:
+    """Add the current user to snap_microk8s group (strictly confined)."""
+    user = getpass.getuser()
+    _run(["sudo", "usermod", "-a", "-G", "snap_microk8s", user])
+    logger.info("added %s to snap_microk8s group", user)
+
+
 def ensure_microk8s(channel: str = "1.28-strict/stable") -> None:
     """Install microk8s and enable required addons."""
     install_snap("microk8s", channel, classic=False)
+    _ensure_microk8s_group()
     _run(["sudo", "microk8s", "status", "--wait-ready"], timeout=SNAP_TIMEOUT)
     for addon in ("dns", "hostpath-storage", "registry"):
         _run(["sudo", "microk8s", "enable", addon], timeout=SNAP_TIMEOUT)
@@ -76,12 +85,16 @@ def bootstrap_controller(
     controller: str = "microk8s-localhost",
     juju_cli: str = "juju",
 ) -> None:
-    """Bootstrap a Juju controller on microk8s if it does not exist."""
+    """Bootstrap a Juju controller on microk8s if it does not exist.
+
+    Uses ``sg snap_microk8s`` so the juju process can read the strictly
+    confined microk8s credentials without requiring a re-login.
+    """
     if is_controller_bootstrapped(controller, juju_cli):
         logger.info("controller %s already bootstrapped", controller)
         return
     _run(
-        [juju_cli, "bootstrap", "microk8s", controller],
+        ["sg", "snap_microk8s", "-c", f"{juju_cli} bootstrap microk8s {controller}"],
         timeout=BOOTSTRAP_TIMEOUT,
     )
     logger.info("controller %s bootstrapped", controller)
