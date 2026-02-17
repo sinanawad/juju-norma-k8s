@@ -15,7 +15,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --dev
+      - run: uv sync --extra dev
       - run: make lint
 
   unit:
@@ -27,7 +27,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --dev
+      - run: uv sync --extra dev
       - run: make unit
       - name: Upload coverage
         if: always()
@@ -72,7 +72,7 @@ jobs:
           sudo snap install juju --classic
           juju bootstrap microk8s test-controller
           juju add-model test-model
-      - run: uv sync --dev
+      - run: uv sync --extra dev
       - name: Pack charm
         run: |
           sudo snap install charmcraft --classic
