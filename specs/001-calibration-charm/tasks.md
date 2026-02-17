@@ -5,12 +5,12 @@
 
 **Tests**: Included per constitution Principle VI (Three-Tier Testing) and SC-007.
 
-**Organization**: Tasks grouped by user story for independent implementation. 22 user stories from spec.md, organized in priority order (P1-P22).
+**Organization**: Tasks grouped by user story for independent implementation. 24 user stories from spec.md, organized in priority order (P1-P24).
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story (US1-US21)
+- **[Story]**: Which user story (US1-US24)
 - Exact file paths included in descriptions
 
 ---
@@ -20,7 +20,7 @@
 **Purpose**: Create project structure, configure tooling, install dependencies
 
 - [X] T001 Create project directory structure: `src/`, `src/grafana_dashboards/`, `src/prometheus_alert_rules/`, `tests/`, `tests/unit/`, `tests/integration/`, `workload/`, `lib/charms/`
-- [X] T002 Initialize Python project with `pyproject.toml` including ops, ops[testing], ruff, coverage[toml], jubilant dependencies and ruff configuration per constitution (line-length 99, Python 3.10 target)
+- [X] T002 Initialize Python project with `pyproject.toml` including ops, ops[testing], ruff, coverage[toml], jubilant dependencies and ruff configuration per constitution (line-length 99, Python 3.12 target)
 - [X] T003 [P] Create `Makefile` with targets: `lint` (ruff check+format), `unit` (pytest tests/unit), `integration` (pytest tests/integration), `clean` (remove build artifacts), `fmt` (ruff format)
 - [X] T004 [P] Run `uv sync` to generate `uv.lock` and verify dependency resolution
 
@@ -144,17 +144,17 @@
 
 ## Phase 9: User Story 7 — Provides/Requires Relations (P7)
 
-**Goal**: Handle calibration provides/requires endpoints for self-relation and inter-charm integration
+**Goal**: Handle calibration provides/requires endpoints for two-instance relation testing and inter-charm integration
 
-**Independent Test**: `juju integrate norma-k8s:calibration-provider norma-k8s:calibration-requirer` → `juju run norma-k8s/0 get-relation-data endpoint=calibration-provider` → verify data
+**Independent Test**: Deploy two instances (`norma-k8s` + `norma-k8s-peer`) → `juju integrate norma-k8s:calibration-provider norma-k8s-peer:calibration-requirer` → `juju run norma-k8s/0 get-relation-data endpoint=calibration-provider` → verify data
 
 ### Implementation
 
-- [ ] T032 [US7] Add calibration relation event handling in `src/charm.py` `__init__`: observe relation-created/joined/changed/departed/broken for both `calibration_provider` and `calibration_requirer` endpoints routed to `_reconcile()`; in `_reconcile()`, for each calibration relation write role and unit name to unit data bag per research.md R3 (use unit-level databags for self-relation safety); in relation-departed handler, log `event.departing_unit.name` to event ledger extra data as `{"departing-unit": unit_name}` to verify departing unit identity (per Juju CI `departer` charm pattern)
+- [ ] T032 [US7] Add calibration relation event handling in `src/charm.py` `__init__`: observe relation-created/joined/changed/departed/broken for both `calibration_provider` and `calibration_requirer` endpoints routed to `_reconcile()`; in `_reconcile()`, for each calibration relation write role and unit name to unit data bag per research.md R3 (use unit-level databags for cross-relation safety); in relation-departed handler, log `event.departing_unit.name` to event ledger extra data as `{"departing-unit": unit_name}` to verify departing unit identity (per Juju CI `departer` charm pattern)
 - [ ] T033 [US7] Add `get-relation-data` action to `charmcraft.yaml` actions section (params: endpoint string required, relation-id integer optional) and implement `_on_get_relation_data_action` handler in `src/charm.py`: iterate relations for endpoint, return `{"relations": [{"id": int, "app-data": dict, "units": {unit_name: dict}}]}`; filter by relation-id if provided
-- [ ] T034 [US7] Add relation unit tests in `tests/unit/test_charm.py`: verify relation events are logged to ledger, verify data written to provider/requirer relation bags via Scenario with Relation, verify get-relation-data returns correct structure, verify self-relation scenario (same app on both sides), verify departing unit identity logged in relation-departed extra data
+- [ ] T034 [US7] Add relation unit tests in `tests/unit/test_charm.py`: verify relation events are logged to ledger, verify data written to provider/requirer relation bags via Scenario with Relation, verify get-relation-data returns correct structure, verify two-instance relation scenario (separate apps with same charm), verify departing unit identity logged in relation-departed extra data
 
-**Checkpoint**: US7 complete — provides/requires and self-relation working
+**Checkpoint**: US7 complete — provides/requires relation working between two charm instances
 
 ---
 
@@ -325,10 +325,10 @@
 
 ### Implementation
 
-- [ ] T064 [US18] Fetch COS charm libraries via `charmcraft fetch-libs` (prometheus_scrape, grafana_dashboard, loki_push_api) into `lib/charms/` and add initialization in `src/charm.py` `__init__`: `MetricsEndpointProvider(self, jobs=[{"static_configs": [{"targets": [f"*:{port}"]}]}])`, `GrafanaDashboardProvider(self)`, `LogProxyConsumer(self, relation_name="log-proxy")` per research.md R5
+- [ ] T064 [US18] Fetch COS charm libraries via `charmcraft fetch-libs` (prometheus_scrape, grafana_dashboard, loki_push_api) into `lib/charms/` and add initialization in `src/charm.py` `__init__`: `MetricsEndpointProvider(self, jobs=[{"static_configs": [{"targets": [f"*:{port}"]}]}])`, `GrafanaDashboardProvider(self)`, `LogForwarder(self, relation_name="log-proxy")` per research.md R5
 - [ ] T065 [P] [US18] Create Grafana dashboard JSON in `src/grafana_dashboards/norma.json`: panels for HTTP request rate (`rate(norma_http_requests_total[5m])`), health status gauge (`norma_healthy`), health toggle count (`norma_health_toggles_total`), with templated datasource variable
 - [ ] T066 [P] [US18] Create Prometheus alert rules in `src/prometheus_alert_rules/norma_alerts.yaml`: `NormaWorkloadDown` (up == 0 for 1m), `NormaHealthCheckFailing` (`norma_healthy == 0` for 2m), `NormaHighErrorRate` (rate of 500 status responses)
-- [ ] T067 [US18] Add COS unit tests in `tests/unit/test_charm.py`: verify MetricsEndpointProvider initialized with correct jobs config, verify GrafanaDashboardProvider initialized, verify LogProxyConsumer initialized with relation_name "log-proxy"
+- [ ] T067 [US18] Add COS unit tests in `tests/unit/test_charm.py`: verify MetricsEndpointProvider initialized with correct jobs config, verify GrafanaDashboardProvider initialized, verify LogForwarder initialized with relation_name "log-proxy"
 
 **Checkpoint**: US18 complete — full COS observability stack integrated
 
@@ -386,7 +386,7 @@
 
 **Dependencies**: None — can be started after Phase 1 (Setup) or deferred until after MVP
 
-- [ ] T075 [P] Create `.github/workflows/ci.yaml` with: trigger on push/PR to main and feature branches; jobs for `lint` (ruff check+format via `make lint`), `unit` (pytest via `make unit` with coverage), `pack` (charmcraft pack), `integration` (optional, manual trigger, requires MicroK8s + Juju bootstrap); use `ubuntu-24.04` runner, `astral-sh/setup-uv` action, Python 3.10+; cache uv dependencies
+- [ ] T075 [P] Create `.github/workflows/ci.yaml` with: trigger on push/PR to main and feature branches; jobs for `lint` (ruff check+format via `make lint`), `unit` (pytest via `make unit` with coverage), `pack` (charmcraft pack), `integration` (optional, manual trigger, requires MicroK8s + Juju bootstrap); use `ubuntu-24.04` runner, `astral-sh/setup-uv` action, Python 3.12+; cache uv dependencies
 - [ ] T076 [P] Create `.github/workflows/rock.yaml` with: trigger on push/PR when `workload/**` or `rockcraft.yaml` changed; jobs for `build` (rockcraft pack), `test` (build Go binary + run `go test ./...`); use `ubuntu-24.04` runner, `snap install rockcraft --classic`, `snap install go --classic`
 
 **Checkpoint**: CI pipeline operational — PRs get automated lint, test, and pack validation
@@ -401,13 +401,13 @@
 
 - [ ] T082 [P] Create `tests/integration/test_lifecycle.py` and `tests/integration/test_pebble.py` (US1-US2): deploy charm, verify active status within 120s, verify event ledger records install/leader-elected/config-changed/start in order, verify workload HTTP responds 200 on `/ready`, verify Pebble layer applied with correct service definition
 - [ ] T083 [P] Create `tests/integration/test_config.py`, `tests/integration/test_status.py`, and `tests/integration/test_actions.py` (US3-US5): set each config type via `juju config`, verify get-config returns updated values, verify BlockedStatus on invalid config, verify set-status action forces status, verify fail-action reports failure, verify event.log() progress visible
-- [ ] T084 [P] Create `tests/integration/test_relations.py` and `tests/integration/test_scaling.py` (US6-US8): deploy 3 units, verify get-peer-data returns all units, verify leader writes app data, verify self-relation via `juju integrate norma-k8s:calibration-provider norma-k8s:calibration-requirer`, verify get-relation-data, scale to 3 then back to 1, verify get-cluster-info reflects correct counts
+- [ ] T084 [P] Create `tests/integration/test_relations.py` and `tests/integration/test_scaling.py` (US6-US8): deploy 3 units, verify get-peer-data returns all units, verify leader writes app data, verify two-instance relation via deploying `norma-k8s-peer` and `juju integrate norma-k8s:calibration-provider norma-k8s-peer:calibration-requirer`, verify get-relation-data, scale to 3 then back to 1, verify get-cluster-info reflects correct counts
 - [ ] T085 [P] Create `tests/integration/test_secrets.py` and `tests/integration/test_storage.py` (US9-US10): verify get-secret-info returns secret with rotation policy, verify check-storage shows attached with marker file, verify storage data survives unit restart
 - [ ] T086 [P] Create `tests/integration/test_health_checks.py`, `tests/integration/test_pebble_ops.py`, and `tests/integration/test_notices.py` (US11-US13): toggle-health action → wait for pebble-check-failed → toggle back → wait for pebble-check-recovered, run test-pebble-ops and verify all operations pass, trigger-notice and verify event-log records custom notice
 - [ ] T087 [P] Create `tests/integration/test_networking.py`, `tests/integration/test_upgrade.py`, `tests/integration/test_multi_container.py`, and `tests/integration/test_security.py` (US14-US17): verify test-networking reports open port and bindings, juju refresh to new revision and verify get-version changes, verify both containers running independently via test-pebble-ops container=norma-secondary, deploy with --trust and verify check-security reports non-root UID and trust available
 - [ ] T088 [P] Create `tests/integration/test_observability.py`, `tests/integration/test_cmr.py`, `tests/integration/test_defer.py`, and `tests/integration/test_oci_resource.py` (US18-US21): verify COS relation setup (metrics-endpoint integration), verify cross-model offer/consume cycle, arm deferral via test-defer then trigger config-changed and verify event-log shows deferred+re-emitted, attach new OCI resource and verify pebble-ready re-fires
 
-**Checkpoint**: All 20 integration test files created — `make integration` validates full charm behavior against live Juju
+**Checkpoint**: All integration test files created (US1-US21 + US22 introspect + US24 multi-storage) — `make integration` validates full charm behavior against live Juju
 
 ---
 
@@ -415,7 +415,7 @@
 
 **Purpose**: Single action returns comprehensive structured report of all internal charm state with optional section filtering
 
-**Dependencies**: All prior user stories (collectors read data populated by US1-US21)
+**Dependencies**: All prior user stories (collectors read data populated by US1-US24)
 
 - [ ] T089 Add `introspect` action definition with `sections` parameter to `charmcraft.yaml` per `contracts/actions-schema.yaml`. Register `introspect_action` observer in `__init__` and add `REPORT_SECTIONS` constant (identity, version, leadership, config, event-ledger, relations, storage, containers, secrets) in `src/charm.py`
 - [ ] T090 [P] Implement 9 section collectors (`_collect_identity`, `_collect_version`, `_collect_leadership`, `_collect_config`, `_collect_event_ledger`, `_collect_relations`, `_collect_storage`, `_collect_containers`, `_collect_secrets`) as private methods on the charm class, each returning a plain dict and wrapped in try/except for graceful degradation (`{"status": "unavailable", "reason": "..."}`), in `src/charm.py`
@@ -424,6 +424,37 @@
 - [ ] T093 CLI Acceptance (Constitution VIII): Deploy charm, run `juju run norma-k8s/0 introspect`, verify all 9 sections present with accurate data. Run with `sections=config,leadership` and verify only those sections returned. Run with `sections=config,nonexistent` and verify only config returned. Verify action completes within 5 seconds.
 
 **Checkpoint**: `juju run norma-k8s/0 introspect` returns full structured report, filtering works, graceful degradation on disconnected containers
+
+---
+
+## Phase 26: US23 — Multi-Architecture OCI Image
+
+**Purpose**: Build ROCK image for amd64 and arm64 so CI can validate multi-arch deployment
+
+**Dependencies**: Phase 2 (rockcraft.yaml exists)
+
+- [ ] T094 Add `arm64` platform to `rockcraft.yaml` alongside existing `amd64`. Add `GOARCH` cross-compilation support in the Go build override (rockcraft Go plugin uses `override-build`). Verify `rockcraft pack` produces an image for the host arch.
+- [ ] T095 [P] Add `arm64` platform to `charmcraft.yaml` `platforms:` section (alongside existing `amd64`).
+- [ ] T096 CLI Acceptance (Constitution VIII): Build the ROCK on amd64, verify the image manifest includes the correct architecture label. Document multi-arch build procedure for CI (building arm64 images on amd64 requires `rockcraft pack --platform arm64` or QEMU emulation).
+
+**Checkpoint**: `rockcraft.yaml` and `charmcraft.yaml` declare amd64 + arm64 platforms; ROCK builds successfully for host architecture
+
+---
+
+## Phase 27: US24 — Multiple Storage Definitions
+
+**Purpose**: Add a second optional storage to enable independent attachment/detachment testing
+
+**Dependencies**: Phase 9 (US10 storage handling exists)
+
+- [ ] T097 Add `logs` storage definition to `charmcraft.yaml`: type filesystem, minimum-size 512M, multiple-range 0-1 (optional — not provisioned unless explicitly requested). Add mount to `norma` container at `/var/log/norma`.
+- [ ] T098 Add `LOGS_STORAGE_PATH` constant to `src/norma.py` with value `/var/log/norma` and `LOGS_MARKER_FILE` constant with value `logs-marker.json`.
+- [ ] T099 Extend `_on_check_storage_action` in `src/charm.py` to accept a `name` parameter (default `data`). When `name=logs`, check the `logs` storage mount path instead of `data`. Write/read a logs marker file analogous to the data marker. Report storage as unavailable (not fail) if the storage is not attached.
+- [ ] T100 Extend `_collect_storage` introspect collector in `src/charm.py` to enumerate all declared storages (both `data` and `logs`), reporting status for each.
+- [ ] T101 [P] Add unit tests for multiple storage in `tests/unit/test_charm.py`: `TestMultipleStorage` class with tests for: check-storage with name=data (existing), check-storage with name=logs when attached, check-storage with name=logs when not attached (reports unavailable), introspect storage section lists both storages.
+- [ ] T102 CLI Acceptance (Constitution VIII): Deploy charm, verify only `data` storage attached. Run `juju add-storage norma-k8s/0 logs=1`. Verify `juju run norma-k8s/0 check-storage name=logs` reports available. Run `juju run norma-k8s/0 introspect sections=storage` and verify both storages listed.
+
+**Checkpoint**: `check-storage name=logs` works, introspect lists both storages, `logs` storage is independently attachable
 
 ---
 
@@ -452,6 +483,8 @@
 - **CI Pipeline (Phase O1)**: Orthogonal — can start after Setup, defer until post-MVP, or do anytime
 - **Integration Tests (Phase O2)**: Orthogonal — each test group can start after its story cluster is implemented
 - **Introspection (Phase 25)**: Depends on foundational stories (US1-US9) being complete; can run before US10-US21
+- **Multi-Arch (Phase 26)**: Depends on Phase 2 (rockcraft.yaml); can run anytime after Foundational
+- **Multiple Storage (Phase 27)**: Depends on Phase 9 (US10 storage); extends existing storage handling
 - **Polish (Phase 24)**: Depends on all user stories being complete
 
 ### Cross-Story Dependencies
@@ -470,6 +503,7 @@ Most stories are independent after Foundational. Notable dependencies:
 | US19 (CMR) | US7 (Relations) | CMR uses calibration relation endpoints |
 | US21 (Resource) | US2 (Pebble) | Resource refresh triggers pebble-ready |
 | US22 (Introspect) | US1-US9 | Collectors read data populated by prior stories |
+| US24 (Multi-Storage) | US10 (Storage) | Extends existing storage handling |
 | All stories | US1 (Lifecycle) | Event ledger used for verification |
 
 ### Within Each User Story
@@ -548,6 +582,8 @@ Task: "Create Prometheus alert rules in src/prometheus_alert_rules/norma_alerts.
 8. US14-US17 (Network/Upgrade/Multi-Container/Security) → Test → Operational
 9. US18-US21 (COS/CMR/Defer/Resource) → Test → Full calibration suite
    9a. US22 (Introspection) → Test → Single-call state report
+   9b. US23 (Multi-Arch) → Build → Multi-architecture OCI images
+   9c. US24 (Multi-Storage) → Test → Independent storage operations
 10. Polish → **Complete!**
 11. CI Pipeline (Phase O1) → Can be done at any point from step 1 onward
 12. Integration Tests (Phase O2) → Can start after each story cluster is complete

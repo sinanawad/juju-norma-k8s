@@ -6,7 +6,7 @@
 ## Summary
 
 Build a comprehensive Juju K8s calibration charm (`norma-k8s`) that exercises
-all 22 Juju features relevant to K8s charms. The charm follows the holistic
+all 24 Juju features relevant to K8s charms. The charm follows the holistic
 reconciler architecture with a purpose-built Go binary workload co-located in
 `workload/`, managed via Pebble in two containers (same ROCK image, different
 ports). Every feature is testable independently via dedicated actions, making
@@ -14,19 +14,19 @@ the charm suitable as a CI validation suite for Juju itself.
 
 ## Technical Context
 
-**Language/Version**: Python 3.10+ (charm), Go 1.22+ (workload binary)
+**Language/Version**: Python 3.12+ (charm, ubuntu@24.04), Go 1.22+ (workload binary)
 **Primary Dependencies**: `ops` (charm framework), `ops[testing]` (unit tests),
 `jubilant` (integration tests), `ruff` (lint), `coverage[toml]` (coverage)
 **Charm Libraries**: `prometheus_scrape`, `grafana_dashboard`, `loki_push_api`
-**Storage**: Juju filesystem storage (PersistentVolume), peer relation data
+**Storage**: Juju filesystem storage (PersistentVolume, two named storages: data + logs), peer relation data
 **Testing**: ops.testing/Scenario (unit), jubilant (integration), ruff (lint)
 **Target Platform**: Kubernetes (Juju 3.6+, ubuntu@24.04, MicroK8s)
 **Project Type**: Single project (charm + co-located Go workload)
 **Performance Goals**: Active in <120s, scale 1→3 in <180s, actions <30s
 **Constraints**: Non-root execution, chiselled ROCK, no StoredState, no
 event.defer() for control flow
-**Scale/Scope**: 22 user stories, 17 actions (+1 introspect in US22), 2 containers,
-7+ relation endpoints, 5 config options (one per type)
+**Scale/Scope**: 24 user stories, 17 actions (+1 introspect in US22), 2 containers,
+7+ relation endpoints, 5 config options (one per type), 2 named storages
 
 ## Constitution Check
 
@@ -109,6 +109,8 @@ tests/
     test_cmr.py
     test_defer.py
     test_oci_resource.py
+    test_introspect.py
+    test_multi_storage.py
 ```
 
 **Structure Decision**: Single project layout per constitution. The `workload/`

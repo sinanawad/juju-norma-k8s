@@ -166,15 +166,14 @@ both sides.
 - **Event firing**: Events fire on BOTH endpoints independently. Each unit
   receives `relation-created`, `relation-joined`, etc. for both provider and
   requirer sides.
-- **Critical gotcha**: In a self-relation, `self.app == rel.app` on both sides.
-  Application-level databags cannot distinguish direction. Use **unit-level
-  databags** (`rel.data[self.unit]`) for directional data, or embed role
-  information in keys.
-- **Single-unit**: Self-relation still works with 1 unit. The unit sees itself
-  as a remote unit on both endpoints. Each relation object has separate databags.
-- **Peer vs self**: Peer relation is automatic and permanent. Self-relation
-  requires explicit `juju integrate` and can be removed. They serve different
-  purposes.
+- **Critical gotcha**: Juju 4 does NOT support same-application provides/requires
+  self-relations (only peer self-relations). To test provides/requires, deploy
+  two instances of the same charm as separate applications (e.g., `norma-k8s`
+  and `norma-k8s-peer`). Use **unit-level databags** (`rel.data[self.unit]`)
+  for directional data, or embed role information in keys.
+- **Two-instance pattern**: Deploy the same charm twice under different app names,
+  then `juju integrate app-a:provides app-b:requires`. Each relation object has
+  separate databags. Requires explicit `juju integrate` and can be removed.
 
 ### Implementation Pattern
 
@@ -231,7 +230,7 @@ if secret_uri:
 |---------|---------|---------|
 | MetricsEndpointProvider | `charms.prometheus_k8s.v0.prometheus_scrape` | v0 |
 | GrafanaDashboardProvider | `charms.grafana_k8s.v0.grafana_dashboard` | v0 |
-| LogProxyConsumer | `charms.loki_k8s.v0.loki_push_api` | v0 |
+| LogForwarder | `charms.loki_k8s.v1.loki_push_api` | v1 |
 
 **Declaration in charmcraft.yaml** under `charm-libs:` and fetched via
 `charmcraft fetch-libs`.
@@ -242,9 +241,8 @@ self._metrics = MetricsEndpointProvider(
     self, jobs=[{"static_configs": [{"targets": [f"*:{port}"]}]}]
 )
 self._grafana = GrafanaDashboardProvider(self)
-self._loki = LogProxyConsumer(
-    self, relation_name="log-proxy",
-    log_files=["/var/log/norma/norma.log"]
+self._loki = LogForwarder(
+    self, relation_name="log-proxy"
 )
 ```
 
@@ -274,7 +272,7 @@ self._loki = LogProxyConsumer(
 | Go binary architecture | Single-file, Go 1.22+, prometheus/client_golang |
 | Go binary endpoints | 5 endpoints with health toggle (atomic + flag file) |
 | ROCK image design | `base: bare`, static binary only, no libc/ca-certs |
-| Self-relation mechanism | Provides + requires with same interface |
+| Self-relation mechanism | Two instances of same charm with matching interface (Juju 4 limitation) |
 | Secret config type | `type: secret`, resolve with `model.get_secret()` |
-| COS library versions | prometheus_scrape v0, grafana_dashboard v0, loki_push_api v0 |
+| COS library versions | prometheus_scrape v0, grafana_dashboard v0, loki_push_api v1 |
 | Introspect action format | Per-section JSON strings in action results, private collector methods |

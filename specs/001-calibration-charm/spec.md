@@ -180,8 +180,9 @@ A CI engineer integrates the calibration charm with another charm (or
 a second instance of itself) to exercise the full relation lifecycle.
 The charm declares both provides and requires endpoints. When integrated,
 both sides exchange data via their respective data bags and log all
-relation events. A self-relation (charm related to itself) is also
-supported for testing without a second charm.
+relation events. Testing uses two instances of the same charm (e.g.,
+`norma-k8s` and `norma-k8s-peer`) since Juju 4 does not support
+same-application provides/requires self-relations (only peer).
 
 **Why this priority**: Relations are Juju's core mechanism for
 inter-charm communication and service composition.
@@ -196,7 +197,7 @@ bidirectionally via a "get-relation-data" action.
 2. **Given** an active relation, **When** the provider sets data in its app bag, **Then** the requirer receives `relation-changed` and can read the data.
 3. **Given** an active relation with multiple units on one side, **When** a unit departs, **Then** `relation-departed` fires on the remaining side.
 4. **Given** an active relation, **When** the relation is removed (`juju remove-relation`), **Then** `relation-broken` fires on both sides and relation data is no longer accessible.
-5. **Given** the calibration charm, **When** it is related to itself via a self-relation interface, **Then** the full relation lifecycle works identically.
+5. **Given** two instances of the calibration charm deployed as separate applications, **When** they are integrated via the calibration interface (provider ↔ requirer), **Then** the full relation lifecycle works identically to cross-charm relations.
 6. **Given** a requires endpoint with `limit: 1`, **When** a second integration is attempted, **Then** the integration is rejected.
 7. **Given** an active relation with multiple units, **When** a unit departs, **Then** `event.departing_unit` is set correctly in the `relation-departed` handler, identifying which specific unit is leaving.
 
@@ -473,7 +474,7 @@ scrapes metrics, Grafana receives the dashboard, and Loki receives logs.
 
 1. **Given** a `prometheus_scrape` relation, **When** integrated with Prometheus, **Then** metrics are scraped from the charm's metrics endpoint.
 2. **Given** a `grafana_dashboard` relation, **When** integrated with Grafana, **Then** the shipped JSON dashboard appears in Grafana.
-3. **Given** a `loki_push_api` relation, **When** integrated with Loki, **Then** the `LogProxyConsumer` library configures Pebble log forwarding and workload logs are visible in Loki.
+3. **Given** a `loki_push_api` relation, **When** integrated with Loki, **Then** the `LogForwarder` library configures Pebble native log forwarding and workload logs are visible in Loki.
 4. **Given** shipped Prometheus alert rules, **When** the relation is active, **Then** alert rules are loaded into Prometheus.
 
 ---
@@ -584,6 +585,58 @@ the returned report contains all expected sections with accurate data.
 
 ---
 
+### User Story 23 - Multi-Architecture OCI Image (Priority: P23)
+
+A Juju CI engineer deploys the calibration charm on arm64 K8s nodes (or
+mixed-arch clusters) and verifies that the workload container starts and
+serves health endpoints identically to amd64. The ROCK image is built
+for multiple architectures so that CI can validate deployment across the
+hardware targets Juju supports in production.
+
+**Why this priority**: Juju CI tests arm64 and s390x deployment paths
+(previously covered by `sidecar-sudoer`). Without multi-arch images,
+norma-k8s cannot replace those test charms. Go cross-compiles trivially
+and the ROCK bare base supports all three architectures.
+
+**Independent Test**: Build the ROCK image with `rockcraft pack` on
+amd64, push both amd64 and arm64 manifests to the registry, deploy on
+an arm64 node, and verify the workload health endpoint responds.
+
+**Acceptance Scenarios**:
+
+1. **Given** the rockcraft.yaml and charmcraft.yaml declare amd64 and arm64 platforms, **When** the ROCK is built, **Then** both architecture images are produced and can be pushed to a container registry as a multi-arch manifest.
+2. **Given** a multi-arch OCI image in the registry, **When** the charm is deployed on an arm64 K8s node, **Then** the workload container starts, passes health checks, and the charm reaches active status.
+3. **Given** a multi-arch OCI image, **When** the charm is deployed on amd64, **Then** the deployment behaves identically to the single-arch build — no regression.
+
+---
+
+### User Story 24 - Multiple Storage Definitions (Priority: P24)
+
+A Juju CI engineer tests independent storage attachment and detachment
+by exercising two named storage volumes: the existing `data` storage
+and a new optional `logs` storage. This enables CI to verify scenarios
+where one storage is attached while the other is not, or where storages
+are detached independently — previously tested by multi-storage charms
+like the PostgreSQL test charm.
+
+**Why this priority**: Juju CI storage tests exercise per-name
+attachment, detachment, and import. A single storage definition cannot
+test these paths. Adding a second optional storage closes this gap.
+
+**Independent Test**: Deploy the charm, verify only `data` storage is
+attached by default, attach `logs` storage, verify both appear in
+check-storage output, then detach `logs` and verify `data` persists.
+
+**Acceptance Scenarios**:
+
+1. **Given** the charm declares `data` (required) and `logs` (optional) filesystem storages, **When** deployed without explicit storage requests, **Then** only `data` is provisioned and the charm reaches active status.
+2. **Given** a running charm, **When** `logs` storage is attached via `juju add-storage`, **Then** the charm records `storage-attached` in the event ledger and the `check-storage` action with `name=logs` reports the storage as available.
+3. **Given** both storages attached, **When** `logs` storage is detached, **Then** `storage-detaching` fires, `data` storage remains intact, and `check-storage` with `name=data` still passes.
+4. **Given** a running charm, **When** the `check-storage` action is run with `name=logs` and logs storage is not attached, **Then** the action reports the storage as unavailable rather than failing.
+5. **Given** both storages attached, **When** the `introspect` action is run, **Then** the storage section lists both `data` and `logs` with their respective mount paths and status.
+
+---
+
 ### Edge Cases
 
 - What happens when `pebble-ready` fires but the container loses connectivity before the layer is applied? *(Covered by US2: `_reconcile()` wraps Pebble ops in `try/except ConnectionError`; next pebble-ready retries.)*
@@ -623,6 +676,8 @@ the returned report contains all expected sections with accurate data.
 - **FR-022**: The charm MUST handle OCI resource refresh by re-applying Pebble layers and recovering to active status when `juju attach-resource` updates the container image.
 - **FR-023**: The charm MUST exercise Pebble service control operations (stop, start, restart) and plan introspection (get_plan, get_services) in addition to file and exec operations.
 - **FR-024**: The charm MUST provide a single `introspect` action that returns a comprehensive structured report of all internal charm state (event ledger, config, relations, storage, containers, leadership, secrets metadata, version, identity) with optional section filtering. The action MUST succeed even when subsystems are unavailable, and MUST NOT include actual secret content.
+- **FR-025**: The OCI image MUST be built for at least amd64 and arm64 architectures. The charmcraft.yaml MUST declare both platforms so that the charm can be deployed on either architecture.
+- **FR-026**: The charm MUST declare at least two named filesystem storages: `data` (required, mounted at `/var/lib/norma`) and `logs` (optional, mounted at `/var/log/norma`). The `check-storage` action MUST accept a `name` parameter to query any declared storage independently.
 
 ### Key Entities
 
@@ -634,7 +689,7 @@ the returned report contains all expected sections with accurate data.
 ### Assumptions
 
 - The calibration charm is deployed on a Juju 3.6+ controller with a K8s cloud.
-- The OCI image for the workload container is a chiselled ROCK containing a purpose-built Go binary (single static executable, no runtime dependencies), source in `workload/`, built via rockcraft as part of this repo's CI.
+- The OCI image for the workload container is a chiselled ROCK containing a purpose-built Go binary (single static executable, no runtime dependencies), source in `workload/`, built via rockcraft as part of this repo's CI. Multi-arch builds (amd64 + arm64) require cross-compilation support in CI (Go's `GOARCH` env var).
 - Cross-model relation testing requires access to two Juju models on the same controller.
 - COS integration testing requires the Prometheus, Grafana, and Loki charms to be available.
 - The charm name follows the convention `norma-k8s` per the project constitution.
@@ -643,7 +698,7 @@ the returned report contains all expected sections with accurate data.
 
 ### Measurable Outcomes
 
-- **SC-001**: All 22 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
+- **SC-001**: All 24 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
 - **SC-002**: Each user story can be tested independently by deploying the charm and running specific actions without requiring all other stories to be implemented.
 - **SC-003**: The charm reaches active status within 120 seconds of deployment on a standard MicroK8s cluster.
 - **SC-004**: Scaling from 1 to 3 units completes with all units active within 180 seconds.
