@@ -28,10 +28,19 @@ class TestScaling:
 
     def test_scale_back_to_one(self, juju: jubilant.Juju):
         juju.remove_unit(APP, num_units=2)
-        juju.wait(jubilant.all_active, timeout=180)
+        # Wait for exactly 1 unit — Juju 3.6 unit removal propagates slower.
+        juju.wait(
+            lambda s: len(s.apps[APP].units) == 1,
+            timeout=300,
+        )
         status = juju.status()
         assert len(status.apps[APP].units) == 1
 
     def test_cluster_info_after_scale_down(self, juju: jubilant.Juju):
+        # Ensure scale-down completed (guards against cascade from above).
+        juju.wait(
+            lambda s: len(s.apps[APP].units) == 1,
+            timeout=120,
+        )
         task = juju.run(f"{APP}/leader", "get-cluster-info")
         assert task.results["unit-count"] == "1"

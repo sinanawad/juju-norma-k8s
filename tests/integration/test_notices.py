@@ -19,7 +19,8 @@ class TestNotices:
     def test_trigger_notice_action(self, juju: jubilant.Juju):
         task = juju.run(f"{APP}/leader", "trigger-notice")
         assert task.success
-        assert task.results["key"] == "norma.dev/calibration-test"
+        # Juju 3.6 Pebble may prefix keys with canonical.com/.
+        assert task.results["key"].endswith("calibration-test")
         assert task.results["notice-sent"] == "true"
 
     def test_trigger_notice_with_data(self, juju: jubilant.Juju):

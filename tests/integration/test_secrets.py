@@ -21,7 +21,8 @@ class TestSecrets:
         uri = juju.add_secret("test-cal-secret", {"password": "s3cret"})
         juju.grant_secret("test-cal-secret", APP)
         juju.config(APP, {"calibration-secret": str(uri)})
-        juju.wait(jubilant.all_active, timeout=60)
+        # Juju 3.6: secret grant propagation + config-changed dispatch is slower.
+        juju.wait(jubilant.all_active, timeout=120)
 
         # Verify config reports the secret as set
         task = juju.run(f"{APP}/leader", "get-config")
@@ -30,5 +31,5 @@ class TestSecrets:
 
         # Cleanup
         juju.config(APP, reset=["calibration-secret"])
-        juju.wait(jubilant.all_active, timeout=60)
+        juju.wait(jubilant.all_active, timeout=120)
         juju.remove_secret(str(uri))

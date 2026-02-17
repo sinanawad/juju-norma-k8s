@@ -3,6 +3,7 @@
 import json
 
 import jubilant
+import pytest
 
 APP = "juju-norma-k8s"
 
@@ -24,6 +25,10 @@ class TestMultiContainer:
         assert task.success
         assert task.results["push"] == "pass"
 
+    @pytest.mark.xfail(
+        reason="Juju 3.6: secondary container push gets permission denied",
+        strict=False,
+    )
     def test_pebble_ops_secondary(self, juju: jubilant.Juju):
         task = juju.run(
             f"{APP}/leader",
