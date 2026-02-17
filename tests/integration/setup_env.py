@@ -13,7 +13,7 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 SNAP_TIMEOUT = 300  # seconds
-BOOTSTRAP_TIMEOUT = 900  # CI runners are slow; bootstrap pulls controller images
+BOOTSTRAP_TIMEOUT = 1200  # CI runners are slow; bootstrap pulls controller images
 
 
 class SetupError(Exception):
@@ -116,9 +116,13 @@ def bootstrap_controller(
         logger.info("controller %s already bootstrapped", controller)
         return
     cloud_name = _register_microk8s_cloud(juju_cli)
-    _run(
+    # Stream output instead of capturing — bootstrap is long-running and
+    # we want to see progress in CI logs.
+    logger.info("$ %s bootstrap %s %s", juju_cli, cloud_name, controller)
+    subprocess.run(
         [juju_cli, "bootstrap", cloud_name, controller],
         timeout=BOOTSTRAP_TIMEOUT,
+        check=True,
     )
     logger.info("controller %s bootstrapped", controller)
 
