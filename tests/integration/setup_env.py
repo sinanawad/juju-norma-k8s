@@ -75,15 +75,34 @@ def ensure_microk8s(channel: str = "1.28-strict/stable") -> None:
 # ------------------------------------------------------------------
 
 
-def _connect_juju_microk8s() -> None:
-    """Connect the juju:microk8s snap interface to microk8s:microk8s.
+def _provide_microk8s_credentials(juju_cli: str = "juju") -> None:
+    """Make microk8s credentials available to juju.
 
-    Strictly confined juju discovers microk8s credentials through the
-    ``microk8s`` content interface.  This connection is the supported way
-    to grant juju access without group-membership tricks.
+    Tries the snap content interface first (juju 4+), then falls back to
+    manually copying the kubeconfig into juju's expected location (works
+    with juju 3.6 which lacks the microk8s plug).
     """
-    _run(["sudo", "snap", "connect", "juju:microk8s", "microk8s:microk8s"])
-    logger.info("snap interface juju:microk8s connected")
+    # Try snap interface first (juju 4+).
+    result = _run(
+        ["sudo", "snap", "connect", "juju:microk8s", "microk8s:microk8s"],
+        check=False,
+    )
+    if result.returncode == 0:
+        logger.info("snap interface juju:microk8s connected")
+        return
+
+    # Fallback: manually copy credentials for juju 3.x.
+    logger.info("snap interface unavailable, copying credentials manually")
+    # Resolve the actual juju snap revision directory.
+    rev = _run(["readlink", "-f", "/snap/juju/current"])
+    juju_snap_dir = rev.stdout.strip().replace("/snap/", "/var/snap/", 1)
+    creds_dir = f"{juju_snap_dir}/microk8s/credentials"
+    _run(["sudo", "mkdir", "-p", creds_dir])
+    _run(
+        ["sudo", "sh", "-c", f"microk8s config > {creds_dir}/client.config"],
+        timeout=SNAP_TIMEOUT,
+    )
+    logger.info("microk8s credentials written to %s", creds_dir)
 
 
 def is_controller_bootstrapped(controller: str, juju_cli: str = "juju") -> bool:
@@ -100,7 +119,7 @@ def bootstrap_controller(
     if is_controller_bootstrapped(controller, juju_cli):
         logger.info("controller %s already bootstrapped", controller)
         return
-    _connect_juju_microk8s()
+    _provide_microk8s_credentials(juju_cli)
     _run(
         [juju_cli, "bootstrap", "microk8s", controller],
         timeout=BOOTSTRAP_TIMEOUT,
