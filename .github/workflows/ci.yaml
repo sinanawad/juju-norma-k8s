@@ -35,6 +35,7 @@ jobs:
         with:
           name: coverage-report
           path: .coverage
+          if-no-files-found: ignore
 
   pack:
     name: Pack Charm
