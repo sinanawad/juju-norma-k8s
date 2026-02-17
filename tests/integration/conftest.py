@@ -38,7 +38,7 @@ from .setup_env import SetupError, check_prerequisites, ensure_environment
 logger = logging.getLogger(__name__)
 
 APP = "juju-norma-k8s"
-CHARM_FILE_GLOB = "juju-norma-k8s_*.charm"
+CHARM_FILE_GLOB = "*norma-k8s_*.charm"
 OCI_IMAGE_DEFAULT = "localhost:32000/norma:0.1.0"
 RESOURCE_NAME = "juju-norma-image"
 
