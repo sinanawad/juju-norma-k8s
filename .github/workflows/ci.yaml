@@ -56,10 +56,28 @@ jobs:
           name: charm
           path: "*.charm"
 
+  build-rock:
+    name: Build ROCK
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup LXD
+        uses: canonical/setup-lxd@main
+      - name: Install rockcraft
+        run: sudo snap install rockcraft --classic
+      - name: Build ROCK (amd64 only)
+        run: rockcraft pack --platform amd64
+      - name: Upload ROCK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rock
+          path: "*.rock"
+
   integration:
     name: Integration (${{ matrix.juju-channel }})
     runs-on: ubuntu-24.04
-    needs: [unit, pack]
+    needs: [unit, pack, build-rock]
     if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 30
     strategy:
@@ -74,7 +92,23 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: charm
+      - uses: actions/download-artifact@v4
+        with:
+          name: rock
       - run: uv sync --extra dev
+      - name: Setup microk8s
+        run: |
+          sudo snap install microk8s --channel=1.34-strict/stable
+          sudo usermod -a -G snap_microk8s $USER
+          sudo microk8s status --wait-ready
+          sudo microk8s enable dns hostpath-storage registry
+      - name: Push ROCK to local registry
+        run: |
+          sudo snap install rockcraft --classic
+          rockcraft.skopeo --insecure-policy copy \
+            oci-archive:$(ls *.rock) \
+            docker://localhost:32000/norma:0.1.0 \
+            --dest-tls-verify=false
       - run: make integration
         timeout-minutes: 25
         env:
