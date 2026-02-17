@@ -42,6 +42,8 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
+      - name: Setup LXD
+        uses: canonical/setup-lxd@main
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
       - run: charmcraft fetch-libs
