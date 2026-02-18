@@ -1,7 +1,6 @@
 """Integration tests for US12: Pebble File/Exec Operations."""
 
 import jubilant
-import pytest
 
 APP = "juju-norma-k8s"
 
@@ -24,10 +23,6 @@ class TestPebbleOps:
         task = juju.run(f"{APP}/leader", "test-pebble-ops")
         assert "passed" in task.results["summary"]
 
-    @pytest.mark.xfail(
-        reason="Juju 3.6: secondary container push gets permission denied",
-        strict=False,
-    )
     def test_pebble_ops_secondary_container(self, juju: jubilant.Juju):
         task = juju.run(
             f"{APP}/leader",

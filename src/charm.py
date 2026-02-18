@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright 2026 Canonical Ltd.
-# See LICENSE file for licensing details.
-
 """Norma K8s calibration charm — exercises all Juju K8s charm features.
 
 This charm follows the holistic reconciler architecture: all lifecycle events
@@ -694,8 +691,11 @@ class NormaK8sCharm(ops.CharmBase):
             ) as e:
                 results[name] = f"fail: {e}"
 
-        test_path = "/var/lib/norma/pebble-test.txt"
-        test_dir = "/var/lib/norma/pebble-test-dir/nested"
+        # Primary container has /var/lib/norma via storage mount;
+        # secondary container only has /tmp writable (bare ROCK).
+        base_dir = "/var/lib/norma" if container_name == norma.CONTAINER_NAME else "/tmp"
+        test_path = f"{base_dir}/pebble-test.txt"
+        test_dir = f"{base_dir}/pebble-test-dir/nested"
         test_content = "pebble-ops-test-data"
 
         # --- File operations ---
@@ -710,7 +710,7 @@ class NormaK8sCharm(ops.CharmBase):
             container.make_dir(test_dir, make_parents=True)
 
         def op_list_files():
-            files = container.list_files("/var/lib/norma")
+            files = container.list_files(base_dir)
             names = [f.name for f in files]
             assert "pebble-test.txt" in names
 
@@ -732,9 +732,10 @@ class NormaK8sCharm(ops.CharmBase):
 
         def op_exists():
             # Push a temp file, verify exists, then clean up
-            container.push("/var/lib/norma/exists-test", "x", make_dirs=True)
-            assert container.exists("/var/lib/norma/exists-test")
-            container.remove_path("/var/lib/norma/exists-test")
+            exists_path = f"{base_dir}/exists-test"
+            container.push(exists_path, "x", make_dirs=True)
+            assert container.exists(exists_path)
+            container.remove_path(exists_path)
 
         # --- Service operations ---
         service_name = container_name
@@ -786,7 +787,7 @@ class NormaK8sCharm(ops.CharmBase):
             event.fail("Cannot connect to container")
             return
 
-        key = event.params.get("key", "canonical.com/norma/calibration-test")
+        key = event.params.get("key", "norma.dev/calibration-test")
         data = event.params.get("data", "{}")
 
         try:
