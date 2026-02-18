@@ -1,6 +1,3 @@
-# Copyright 2026 Canonical Ltd.
-# See LICENSE file for licensing details.
-
 """Workload abstraction module for the norma-k8s calibration charm.
 
 This module has ZERO dependency on the ops framework. It handles Pebble layer

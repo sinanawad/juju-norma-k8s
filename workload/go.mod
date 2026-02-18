@@ -1,4 +1,4 @@
-module github.com/canonical/juju-norma-k8s/workload
+module github.com/sinanawad/juju-norma-k8s/workload
 
 go 1.22
 

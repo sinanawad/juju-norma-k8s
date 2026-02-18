@@ -1,5 +1,5 @@
 type: charm
-name: norma-k8s
+name: juju-norma-k8s
 title: Norma Calibration
 summary: Juju K8s calibration charm exercising all charm features
 description: |
@@ -139,7 +139,7 @@ actions:
       key:
         type: string
         description: Notice key
-        default: canonical.com/norma/calibration-test
+        default: norma.dev/calibration-test
       data:
         type: string
         description: JSON-encoded key-value data payload
@@ -223,6 +223,6 @@ charm-user: non-root
 
 links:
   source:
-    - https://github.com/canonical/norma-k8s-operator
+    - https://github.com/sinanawad/juju-norma-k8s
   issues:
-    - https://github.com/canonical/norma-k8s-operator/issues
+    - https://github.com/sinanawad/juju-norma-k8s/issues

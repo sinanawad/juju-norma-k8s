@@ -1,5 +1,5 @@
 [project]
-name = "norma-k8s"
+name = "juju-norma-k8s"
 version = "0.1.0"
 description = "Juju K8s calibration charm exercising all charm features"
 requires-python = ">=3.12"

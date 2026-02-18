@@ -1,6 +1,3 @@
-# Copyright 2026 Canonical Ltd.
-# See LICENSE file for licensing details.
-
 """Unit tests for the workload abstraction module (src/norma.py).
 
 These tests use plain pytest with no ops dependency, validating that
