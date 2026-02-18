@@ -2,11 +2,15 @@
 
 A comprehensive **Juju K8s calibration charm** that exercises every feature and capability relevant to Kubernetes charms. Designed as a self-sufficient CI validation suite for Juju itself, this single charm can replace all existing K8s sidecar test charms.
 
+This repository also serves as a **reference implementation** for building Juju K8s charms. See [Reference Documentation](#reference-documentation) below.
+
 ## What is this?
 
 `juju-norma-k8s` is not a production workload charm. It is a **test harness** — a purpose-built charm that systematically exercises all 25 Juju K8s features so that Juju's own CI can verify nothing is broken. Every feature is independently testable via dedicated actions, making it trivial to isolate regressions.
 
 The charm bundles a minimal Go HTTP server (the "Norma" binary) as its workload, managed via Pebble inside a chiselled (distroless) ROCK image.
+
+It is also a **canonical example** of how to build a production-quality Juju K8s charm — demonstrating the holistic reconciler pattern, two-module separation, non-root security, COS observability, and three-tier testing (unit/integration/CLI acceptance).
 
 ## Capabilities
 
@@ -235,6 +239,19 @@ JUJU_MODEL=my-model make integration
 | **Principal** (default) | `charmcraft.yaml` | Primary charm with `charm-user: non-root` |
 | **Subordinate** | `charmcraft-subordinate.yaml` | Same source, `subordinate: true`, shares principal's pod |
 | **Sudoer** | `charmcraft-sudoer.yaml` | CI-only variant with `charm-user: sudoer` privilege mode |
+
+## Reference Documentation
+
+This repo doubles as a reference implementation for building Juju K8s charms. The `docs/reference/` directory contains four guides designed for both humans and AI agents building new charms:
+
+| Document | What it answers |
+|----------|----------------|
+| [**Charm Anatomy**](docs/reference/charm-anatomy.md) | What files do I need and what goes in each? File-by-file walkthrough of the entire repo. |
+| [**Patterns**](docs/reference/patterns.md) | Show me the code for implementing feature X. 18 patterns with annotated code extracted from this repo: reconciler, Pebble, config, relations, storage, actions, secrets, status, observability, security, testing. |
+| [**Scaffold**](docs/reference/scaffold.md) | How do I start from zero? Minimal viable charm, then a decision matrix and step-by-step guides for adding each feature. |
+| [**Pitfalls**](docs/reference/pitfalls.md) | What will I get wrong? Every real mistake made during this build, with explanations and fixes. |
+
+**To build a new charm using this reference**: Read `scaffold.md` to understand the project skeleton. Check the decision matrix for which features you need. Read the corresponding sections in `patterns.md` for annotated code. Check `pitfalls.md` before shipping.
 
 ## License
 
