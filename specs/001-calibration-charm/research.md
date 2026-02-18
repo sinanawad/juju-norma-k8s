@@ -265,6 +265,131 @@ self._loki = LogForwarder(
 
 ---
 
+## R7: Subordinate Charm Overlay Strategy (US25)
+
+**Decision**: Reuse the same juju-norma-k8s charm source packed with a different
+charmcraft overlay (`charmcraft-subordinate.yaml`) that adds `subordinate: true`
+and flips the `juju-info` endpoint from provides to requires with
+`scope: container`.
+
+**Rationale**: Avoids maintaining a separate charm codebase. Same code, same
+actions, same logic — different packaging. The subordinate variant shares the
+principal's pod and Pebble environment. CI packs both variants from the same
+source tree.
+
+**Key findings**:
+
+- **`scope: container`** is a requires-side attribute only. The principal's
+  `juju-info` provides endpoint does NOT specify scope.
+- **Subordinate packaging**: A subordinate charm cannot declare `containers`,
+  `resources`, or `storage` — it shares the principal's pod.
+- **Build approach**: Either use `charmcraft pack -c charmcraft-subordinate.yaml`
+  if supported, or copy the overlay as `charmcraft.yaml` in a temp directory.
+- **Principal changes**: Only needs `juju-info` provides endpoint added to
+  `charmcraft.yaml` (FR-027). No code changes required.
+
+### Overlay Delta
+
+```yaml
+# charmcraft-subordinate.yaml — only fields that differ from principal
+subordinate: true
+
+provides:
+  # Remove juju-info from provides
+  calibration-provider: ...
+  metrics-endpoint: ...
+  grafana-dashboard: ...
+
+requires:
+  juju-info:
+    interface: juju-info
+    scope: container
+  calibration-requirer: ...
+  log-proxy: ...
+
+# Omit: containers, resources, storage (subordinates share principal's pod)
+```
+
+---
+
+## R8: K8s Storage CLI Limitations
+
+**Decision**: Write integration tests for `juju attach-storage`, `juju
+import-filesystem`, and `juju deploy --attach-storage` with
+`@pytest.mark.xfail(strict=False)` markers.
+
+**Rationale**: These are real Juju capabilities that should work on K8s container
+models. Tests document expected behavior and auto-detect when Juju adds support,
+without blocking CI.
+
+**Key findings**:
+
+- `juju storage` / `juju list-storage`: "not yet available in 4.0.2"
+- `juju add-storage` / `juju detach-storage`: "not supported on container models"
+- `juju import-filesystem`: Not available for K8s container models
+- `juju deploy --attach-storage`: Not available for K8s container models
+- These limitations apply to both Juju 3.6 and 4.x on K8s
+- The storage API works correctly for initial attachment and pod rescheduling
+
+---
+
+## R9: charm-user Variants (FR-031)
+
+**Decision**: Test both `non-root` (primary) and `sudoer` (variant) execution
+modes via CI build matrix using separate charmcraft overlay files.
+
+**Rationale**: Juju supports three charm-user modes: root (default), non-root
+(UID 170), and sudoer (UID 171 with sudo). The calibration charm must validate
+all modes used by K8s charms.
+
+**Key findings**:
+
+- `charm-user: non-root` sets UID 170, no sudo access
+- `charm-user: sudoer` sets UID 171, has sudo access via PAM
+- `charm-user` is a build-time setting in charmcraft.yaml, not runtime-configurable
+- The primary charm uses `non-root` per Constitution IV
+- The sudoer variant is a CI-only build artifact (`charmcraft-sudoer.yaml`)
+
+---
+
+## R10: Juju K8s Coverage Audit (FR-033 through FR-037)
+
+**Decision**: Add 5 new FRs to close gaps identified by a multi-source coverage audit
+comparing our spec against Juju test charms, Juju source code, Juju documentation,
+and Discourse community patterns.
+
+**Methodology**: 4 research agents analyzed in parallel:
+1. Juju test charms (`testcharms/` in juju repo) — 17 K8s charms mapped
+2. Juju documentation (documentation.ubuntu.com/juju/latest/) — all K8s hooks, tools, operations
+3. Juju source code (hook tools, CAAS provider, API facades) — all jujuc commands
+4. Discourse (discourse.charmhub.io) — community patterns and edge cases
+
+**Findings**: Our spec covers ~90% of Juju's K8s charm surface (100% of test charms,
+100% of active events, 100% of Pebble ops). Gaps were in Juju CLI operations ON
+the charm rather than charm internal capabilities.
+
+**Gaps closed**:
+
+| Gap | FR | Description |
+|-----|-----|-------------|
+| `juju expose`/`unexpose` | FR-033 | K8s creates LoadBalancer/NodePort service |
+| Model migration | FR-034 | `juju migrate` preserving charm state between controllers |
+| `goal-state` hook tool | FR-035 | Planned model state (units, relations) in introspect |
+| `update-status-hook-interval` | FR-036 | Model-config affecting hook dispatch frequency |
+| `juju ssh` + constraints | FR-037 | K8s exec-via-API path + resource requests/limits |
+
+**Gaps deferred (LOW severity)**:
+- `--bind` / network spaces (niche on K8s)
+- Init containers (very new feature, rarely used)
+- Payloads (`payload-*` tools, deprecated)
+
+**Key insight**: The audit scope is "everything Juju can do WITH a K8s charm" —
+not just what the charm does internally, but every `juju` CLI operation that
+targets a K8s charm. This broader framing caught gaps in expose, migrate, ssh,
+constraints, and model-config that a charm-centric view would miss.
+
+---
+
 ## Summary of All NEEDS CLARIFICATION Resolved
 
 | Item | Resolution |
@@ -276,3 +401,7 @@ self._loki = LogForwarder(
 | Secret config type | `type: secret`, resolve with `model.get_secret()` |
 | COS library versions | prometheus_scrape v0, grafana_dashboard v0, loki_push_api v1 |
 | Introspect action format | Per-section JSON strings in action results, private collector methods |
+| Subordinate strategy | Overlay charmcraft-subordinate.yaml, same source, no separate codebase |
+| K8s storage CLI | xfail(strict=False) for attach-storage, import-filesystem, deploy --attach-storage |
+| charm-user variants | CI build matrix: non-root (primary) + sudoer (overlay) |
+| Juju K8s coverage gaps | 5 new FRs: expose/unexpose, model migration, goal-state, update-status-interval, ssh+constraints |

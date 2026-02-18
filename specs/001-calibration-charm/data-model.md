@@ -13,7 +13,7 @@ not persistence).
 |-------|------|-------------|
 | timestamp | str (ISO 8601) | When the event was observed |
 | event_name | str | Juju event name (e.g., `config-changed`, `install`) |
-| unit_name | str | Unit that observed the event (e.g., `norma-k8s/0`) |
+| unit_name | str | Unit that observed the event (e.g., `juju-norma-k8s/0`) |
 | extra | dict[str, str] | Optional metadata (e.g., `{"deferred": "true"}`, `{"relation_id": "3"}`) |
 
 **Storage**: Python `list[dict]` in charm instance. Not persisted.
@@ -89,11 +89,15 @@ Runtime view of the deployment, assembled by `_reconcile()` and reported by acti
 
 ### Storage
 
-| Name | Type | Min Size | Mount Point |
-|------|------|----------|-------------|
-| `data` | filesystem | 1G | `/var/lib/norma` |
+| Name | Type | Min Size | Mount Point | Required |
+|------|------|----------|-------------|----------|
+| `data` | filesystem | 1G | `/var/lib/norma` | Yes |
+| `logs` | filesystem | 512M | `/var/log/norma` | No (0-1) |
 
-**Marker file**: `/var/lib/norma/calibration-marker.json`
+**Data marker file**: `/var/lib/norma/calibration-marker.json`
+Content: `{"created_by": "<unit_name>", "created_at": "<ISO timestamp>", "revision": <int>}`
+
+**Logs marker file**: `/var/log/norma/logs-marker.json`
 Content: `{"created_by": "<unit_name>", "created_at": "<ISO timestamp>", "revision": <int>}`
 
 ## Relation Endpoints
@@ -111,6 +115,7 @@ Content: `{"created_by": "<unit_name>", "created_at": "<ISO timestamp>", "revisi
 | `calibration-provider` | `calibration` | true | — | Testing provides/requires and self-relation (US7) |
 | `metrics-endpoint` | `prometheus_scrape` | true | — | COS metrics (US18) |
 | `grafana-dashboard` | `grafana_dashboard` | true | — | COS dashboards (US18) |
+| `juju-info` | `juju-info` | true | — | Subordinate attachment point (US25) |
 
 ### Requires
 
@@ -119,17 +124,17 @@ Content: `{"created_by": "<unit_name>", "created_at": "<ISO timestamp>", "revisi
 | `calibration-requirer` | `calibration` | true | 1 | Testing provides/requires and self-relation (US7) |
 | `log-proxy` | `loki_push_api` | true | 1 | COS log forwarding (US18) |
 
-**Self-relation**: `juju integrate norma-k8s:calibration-provider norma-k8s:calibration-requirer`
+**Self-relation**: `juju integrate juju-norma-k8s:calibration-provider juju-norma-k8s:calibration-requirer`
 uses matching `calibration` interface on both sides.
 
 ## Containers
 
 | Name | Resource | UID/GID | Mounts |
 |------|----------|---------|--------|
-| `norma` | `norma-image` | 10000:10000 | `data` → `/var/lib/norma` |
-| `norma-secondary` | `norma-image` | 10000:10000 | — |
+| `norma` | `juju-norma-image` | 584792:584792 | `data` -> `/var/lib/norma`, `logs` -> `/var/log/norma` |
+| `norma-secondary` | `juju-norma-image` | 584792:584792 | — |
 
-Both containers use the same ROCK image resource (`norma-image`).
+Both containers use the same ROCK image resource (`juju-norma-image`).
 
 ## State Transitions
 
@@ -184,7 +189,7 @@ The `introspect` action returns a flat key-value map where each key is a section
 | Key | Type | Always Present | Description |
 |-----|------|---------------|-------------|
 | `timestamp` | string (ISO 8601) | Yes | When the report was generated |
-| `unit` | string | Yes | Unit name (e.g., "norma-k8s/0") |
+| `unit` | string | Yes | Unit name (e.g., "juju-norma-k8s/0") |
 | `identity` | JSON string | Yes | Unit, app, and model identity |
 | `version` | JSON string | Yes | Charm and workload versions |
 | `leadership` | JSON string | Yes | Leadership status |
@@ -197,7 +202,7 @@ The `introspect` action returns a flat key-value map where each key is a section
 
 ### Section Schemas
 
-**identity**: `{"unit": "norma-k8s/0", "app": "norma-k8s", "model": "test-model", "is_leader": true}`
+**identity**: `{"unit": "juju-norma-k8s/0", "app": "norma-k8s", "model": "test-model", "is_leader": true}`
 
 **version**: `{"charm_version": "1610bbe", "workload_version": "0.1.0", "workload_available": true}`
 
@@ -221,6 +226,22 @@ When a collector fails: `{"status": "unavailable", "reason": "Description of wha
 
 ---
 
+## Subordinate Overlay (US25)
+
+The subordinate variant is built from the same source tree using a charmcraft overlay file.
+
+### `charmcraft-subordinate.yaml` delta from `charmcraft.yaml`
+
+| Field | Principal | Subordinate |
+|-------|-----------|-------------|
+| `subordinate` | absent | `true` |
+| `juju-info` | `provides: { interface: juju-info }` | `requires: { interface: juju-info, scope: container }` |
+| `containers` | two containers defined | removed (subordinates share principal's pod) |
+| `resources` | `juju-norma-image` OCI | removed |
+| `storage` | `data` + `logs` | removed |
+
+The subordinate overlay keeps all other fields (config, peers, calibration endpoints, actions, charm-libs) identical. This means the subordinate charm code is the same — it just runs inside the principal's pod.
+
 ## Edge Case Assignments (from spec)
 
 Deferred to planning per spec clarification. Assignments to user stories:
@@ -235,3 +256,6 @@ Deferred to planning per spec clarification. Assignments to user stories:
 | relation-broken without relation-changed | US7 | `_reconcile()` reads current relation state; no dependency on prior events |
 | upgrade-charm with unhealthy workload | US15 | `_reconcile()` re-applies layer and replans; health check recovers |
 | Scale-down exceeding tolerance | US8 | Juju handles; remaining units re-elect leader; charm reports via `get-cluster-info` |
+| Force remove while hooks running | US1 | Juju forcefully terminates; model returns to clean state (AC4) |
+| send_signal to exited service | US12 | Pebble returns error; action catches exception and reports failure (AC12) |
+| import-filesystem on bound PV | US10 | Juju rejects the import; PV must be unbound first (AC6, xfail) |

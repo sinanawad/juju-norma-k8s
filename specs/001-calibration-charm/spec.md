@@ -20,6 +20,11 @@
 - Q: What should the second container run? → A: Same Go binary on a different port — validates multi-container Pebble lifecycle using the same ROCK image.
 - Q: How should the 8 listed edge cases be treated? → A: Keep as-is; resolve during planning phase when task decomposition can assign them to user stories.
 
+### Session 2026-02-18
+
+- Q: Where does the test subordinate charm for US25 come from? → A: Reuse the same juju-norma-k8s charm packed with a different charmcraft.yaml overlay that adds `subordinate: true` and changes the `juju-info` endpoint to `requires` with `scope: container`. This avoids maintaining a separate charm codebase — same code, different packaging.
+- Q: How should US10 AC4/AC6/AC7 (attach-storage, import-filesystem, deploy --attach-storage) be handled given Juju's known K8s limitations? → A: Write tests with `xfail(strict=False)` — tests exist and run, marked as expected failures until Juju implements K8s support. This documents expected behavior and auto-detects when support lands.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Charm Lifecycle Events (Priority: P1)
@@ -42,6 +47,8 @@ config-changed -> start fired in order.
 1. **Given** a fresh deployment, **When** the charm is deployed, **Then** the event ledger records `install`, `leader-elected` (if leader), `config-changed`, and `start` in that order.
 2. **Given** a running charm, **When** a unit is removed, **Then** the event ledger records `stop` followed by `remove`.
 3. **Given** a running charm, **When** sufficient time passes (or update-status-hook-interval is shortened), **Then** the `update-status` event fires periodically and is recorded.
+4. **Given** a running charm, **When** `juju remove-application --force` is executed, **Then** the application is removed even if hooks fail or hang, and the model returns to a clean state.
+5. **Given** a running charm, **When** `juju model-config update-status-hook-interval=30s` is executed, **Then** the `update-status` event fires at approximately the new interval rather than the default, and the event ledger confirms the increased frequency.
 
 ---
 
@@ -253,6 +260,7 @@ rotation policy, verify the secret content changes.
 5. **Given** an active relation, **When** the secret owner grants access, **Then** the remote charm can read the secret content.
 6. **Given** a granted secret, **When** access is revoked, **Then** the remote charm can no longer read the secret.
 7. **Given** a secret with multiple revisions, **When** all consumers refresh to the latest, **Then** `secret-remove` fires for obsolete revisions and the charm removes them.
+8. **Given** multiple user-created secrets, **When** they are granted and consumed in parallel, **Then** the charm correctly tracks all secret IDs and can retrieve each secret's content independently.
 
 ---
 
@@ -275,8 +283,10 @@ the unit (or reschedule the pod), verify data persists via action.
 1. **Given** a charm declaring filesystem storage, **When** deployed, **Then** `storage-attached` fires and the storage mount point is accessible.
 2. **Given** attached storage, **When** the charm writes data to the mount point, **Then** the data persists across charm hook invocations.
 3. **Given** a unit with attached storage, **When** the unit is removed, **Then** `storage-detaching` fires before `stop`.
-4. **Given** a previously detached storage volume, **When** re-attached to a new unit via `juju attach-storage`, **Then** the data written by the original unit is still present.
+4. **Given** a previously detached storage volume, **When** re-attached to a new unit via `juju attach-storage`, **Then** the data written by the original unit is still present. *(Integration test: `xfail(strict=False)` — K8s container model storage CLI not yet supported in Juju.)*
 5. **Given** a deployed charm with storage, **When** the pod is rescheduled, **Then** the PersistentVolume is re-mounted and data is intact.
+6. **Given** an existing PersistentVolume, **When** `juju import-filesystem` is used to import it as charm storage, **Then** the charm receives `storage-attached` and can read the volume's existing data. *(Integration test: `xfail(strict=False)` — K8s container model storage CLI not yet supported in Juju.)*
+7. **Given** a built charm with storage, **When** deployed with `juju deploy --attach-storage <name>/<index>`, **Then** the pre-existing storage is bound to the new unit on first deploy rather than provisioning a new volume. *(Integration test: `xfail(strict=False)` — K8s container model storage CLI not yet supported in Juju.)*
 
 ---
 
@@ -334,6 +344,7 @@ verify all operations succeed with expected results.
 9. **Given** a stopped service, **When** `container.start("norma")` is called, **Then** the service starts and `container.get_services()` shows it as active.
 10. **Given** a running service, **When** `container.restart("norma")` is called, **Then** the service restarts (PID changes) and remains active.
 11. **Given** a connected container, **When** `container.get_plan()` is called, **Then** it returns the full Pebble plan matching the applied layer.
+12. **Given** a running service, **When** `container.send_signal()` sends SIGHUP to the service, **Then** the service receives the signal without restarting (verified by PID remaining unchanged).
 
 ---
 
@@ -362,10 +373,11 @@ and data.
 
 ### User Story 14 - Networking & Ports (Priority: P14)
 
-A CI engineer verifies that the charm can open and close ports, and that
-network binding information is accessible. The charm opens its workload
-port on startup, and a "test-networking" action reports open ports and
-binding addresses.
+A CI engineer verifies that the charm can open and close ports, that
+network binding information is accessible, and that `juju expose`/`unexpose`
+controls external access. The charm opens its workload port on startup,
+and a "test-networking" action reports open ports, binding addresses, and
+exposed status.
 
 **Why this priority**: Port management and network bindings are how
 charms declare their connectivity requirements to the Juju model.
@@ -379,6 +391,9 @@ opened, run the test-networking action, verify port and binding info.
 2. **Given** an open port, **When** `self.unit.close_port("tcp", port)` is called, **Then** the port is removed from the opened ports list.
 3. **Given** a deployed charm, **When** `self.model.get_binding(endpoint).network` is queried, **Then** it returns valid ingress and bind addresses.
 4. **Given** a deployed charm, **When** `self.unit.set_ports()` is called with a specific set, **Then** only those ports are open; all others are closed.
+5. **Given** a deployed charm with open ports, **When** `juju expose juju-norma-k8s` is executed, **Then** the application is exposed and the workload port becomes accessible outside the Juju model (K8s creates a LoadBalancer or NodePort service).
+6. **Given** an exposed application, **When** `juju unexpose juju-norma-k8s` is executed, **Then** external access is revoked and only model-internal traffic reaches the workload port.
+7. **Given** a deployed charm, **When** `juju expose juju-norma-k8s` is called and then the test-networking action is run, **Then** the action reports the exposed status.
 
 ---
 
@@ -448,11 +463,12 @@ availability.
 
 **Acceptance Scenarios**:
 
-1. **Given** `charm-user: non-root` in charmcraft.yaml, **When** the charm is deployed, **Then** the charm process runs as a non-root user.
+1. **Given** `charm-user: non-root` in charmcraft.yaml, **When** the charm is deployed, **Then** the charm process runs as a non-root user (UID 170).
 2. **Given** a container configured with non-root uid/gid (584792 for `_daemon_`), **When** the workload starts, **Then** the Pebble process and service run as a non-root user.
 3. **Given** a non-root charm, **When** all standard operations are performed (config, relations, actions, status), **Then** they succeed without permission errors.
 4. **Given** the charm is deployed with `juju deploy --trust`, **When** the check-security action queries cloud credentials, **Then** the cloud type, endpoint, and credential attributes are accessible.
 5. **Given** the charm is deployed without `--trust`, **When** `juju trust <app>` is executed post-deploy, **Then** `config-changed` fires and cloud credentials become available.
+6. **Given** a CI variant of the charm built with `charm-user: sudoer`, **When** deployed, **Then** the charm process runs as UID 171 with sudo privileges, and all standard operations succeed. *(Note: `sudoer` is a build-time variant tested via CI matrix, not a runtime toggle. The primary charm uses `non-root`.)*
 
 ---
 
@@ -562,7 +578,7 @@ new workload version.
 A CI pipeline or developer runs a single action on the charm unit that
 returns a comprehensive report of all internal charm state — event history,
 configuration, relations, storage, containers, leadership, secrets metadata,
-version, and unit identity — so that charm internals can be verified
+version, unit identity, and goal-state — so that charm internals can be verified
 independently of what Juju reports. An optional section filter limits the
 report to specific sections for targeted CI assertions.
 
@@ -576,12 +592,13 @@ the returned report contains all expected sections with accurate data.
 
 **Acceptance Scenarios**:
 
-1. **Given** a deployed unit in active state, **When** the operator runs the introspect action, **Then** the action returns a structured report containing sections for: event ledger, configuration, relations, storage, containers, leadership, secrets (metadata only), version, and identity.
+1. **Given** a deployed unit in active state, **When** the operator runs the introspect action, **Then** the action returns a structured report containing sections for: event ledger, configuration, relations, storage, containers, leadership, secrets (metadata only), version, identity, and goal-state.
 2. **Given** a deployed unit with active peer relations and custom configuration, **When** the operator runs the introspect action, **Then** the relations section lists all active relations with their interface, endpoint, and relation data, and the configuration section shows all current config values including any changed from defaults.
 3. **Given** a deployed unit where the workload container is not yet ready, **When** the operator runs the introspect action, **Then** the report still returns successfully with available sections populated and container/workload sections indicating the unavailable state rather than failing.
 4. **Given** a deployed unit, **When** the operator runs the introspect action with a section filter specifying "relations,config", **Then** the report contains only the relations and config sections.
 5. **Given** a deployed unit, **When** the operator runs the introspect action with no filter, **Then** all sections are included.
 6. **Given** a deployed unit, **When** the operator runs the introspect action with an unrecognised section name, **Then** that section name is silently ignored and the report contains only valid matching sections.
+7. **Given** a deployed unit, **When** the introspect action includes the `goal-state` section, **Then** the report contains the output of `self.model._backend._run_tool("goal-state")` showing the planned state of the model (units and their status, relations and their status).
 
 ---
 
@@ -637,6 +654,44 @@ check-storage output, then detach `logs` and verify `data` persists.
 
 ---
 
+### User Story 25 - Subordinate Charm Integration (Priority: P25)
+
+A Juju CI engineer deploys a subordinate charm alongside the calibration
+charm to verify subordinate relation mechanics: automatic unit cohabitation,
+`scope: container` relations, shared Pebble access, and subordinate lifecycle
+events. This exercises Juju's subordinate deployment model which is used
+extensively by observability agents (grafana-agent, landscape-client) and
+security charms in production.
+
+The test subordinate is the same juju-norma-k8s charm repacked with a
+charmcraft overlay (`charmcraft-subordinate.yaml`) that sets `subordinate: true`
+and changes the `juju-info` endpoint from provides to requires with
+`scope: container`. This reuses the existing charm code — same binary, same
+Pebble layers, different packaging. CI packs both variants (principal +
+subordinate) from the same source tree.
+
+**Why this priority**: Juju CI tests subordinate attachment, removal, and
+lifecycle event ordering. The calibration charm currently has no subordinate
+endpoint, so these code paths are untested. Adding a `juju-info` provides
+endpoint enables any subordinate to attach, and the overlay-based subordinate
+variant validates the full lifecycle without maintaining a separate codebase.
+
+**Independent Test**: Deploy the principal charm, deploy the subordinate
+variant (packed from the same source with the overlay), integrate them, verify
+the subordinate unit appears colocated, run an action on the principal to
+confirm the subordinate relation data is visible, then remove the relation and
+verify cleanup.
+
+**Acceptance Scenarios**:
+
+1. **Given** the charm declares a `juju-info` provides endpoint, **When** a subordinate charm (which declares `juju-info` requires with `scope: container`) is integrated, **Then** one subordinate unit is automatically created per principal unit and they share the same pod.
+2. **Given** a subordinate is integrated, **When** the principal is scaled to 3 units, **Then** 3 subordinate units are automatically created (1:1 mapping).
+3. **Given** a subordinate is integrated, **When** the `introspect` action is run with `sections=relations`, **Then** the subordinate relation appears in the relations output with the subordinate's unit data visible.
+4. **Given** a subordinate is integrated, **When** the relation is removed, **Then** `relation-broken` fires on the principal, the subordinate units are removed, and the principal returns to active status.
+5. **Given** the charm is deployed without any subordinate integration, **When** status is checked, **Then** the charm reaches active status — the subordinate endpoint is optional.
+
+---
+
 ### Edge Cases
 
 - What happens when `pebble-ready` fires but the container loses connectivity before the layer is applied? *(Covered by US2: `_reconcile()` wraps Pebble ops in `try/except ConnectionError`; next pebble-ready retries.)*
@@ -647,6 +702,12 @@ check-storage output, then detach `logs` and verify `data` persists.
 - What happens when a relation-broken event fires for a relation that was never fully established (no relation-changed received)? *(Covered by US7: `_reconcile()` checks current relation state, not event history; relation data may be empty but handler is idempotent.)*
 - What happens when an upgrade-charm event fires while the workload is unhealthy? *(Covered by US15/US11: Reconciler re-applies Pebble layer regardless of health state; health checks recover independently.)*
 - What happens when scale-down removes more units than the cluster can tolerate? *(Covered by US8: `planned_units()` returns target count; remaining units update peer data; no minimum quorum enforced.)*
+- What happens when `juju remove-application --force` is issued while hooks are running? *(Covered by US1 AC4: Juju forcefully terminates the unit; model returns to clean state regardless of hook status.)*
+- What happens when `container.send_signal()` targets a service that has already exited? *(Covered by US12 AC12: Pebble returns an error; the action catches the exception and reports failure.)*
+- What happens when `juju import-filesystem` references a PV that is still bound to another unit? *(Covered by US10 AC6: Juju rejects the import; the PV must be unbound first.)*
+- What happens when `juju expose` is called on a charm that has no open ports? *(Covered by US14 AC5-6: Juju creates the K8s service but no endpoints are reachable until the charm opens ports.)*
+- What happens during model migration if the target controller has a different Juju version? *(Covered by FR-034: Migration tests verify state preservation; version compatibility is Juju's responsibility.)*
+- What happens when `juju ssh` targets a unit whose pod is being rescheduled? *(Covered by FR-037: The SSH connection fails; integration test retries after the pod stabilizes.)*
 
 ## Requirements *(mandatory)*
 
@@ -675,9 +736,20 @@ check-storage output, then detach `logs` and verify `data` persists.
 - **FR-021**: The charm MUST support arming event deferral via action, recording deferrals and re-emissions in the event ledger, and validating that non-deferrable events cannot be deferred.
 - **FR-022**: The charm MUST handle OCI resource refresh by re-applying Pebble layers and recovering to active status when `juju attach-resource` updates the container image.
 - **FR-023**: The charm MUST exercise Pebble service control operations (stop, start, restart) and plan introspection (get_plan, get_services) in addition to file and exec operations.
-- **FR-024**: The charm MUST provide a single `introspect` action that returns a comprehensive structured report of all internal charm state (event ledger, config, relations, storage, containers, leadership, secrets metadata, version, identity) with optional section filtering. The action MUST succeed even when subsystems are unavailable, and MUST NOT include actual secret content.
+- **FR-024**: The charm MUST provide a single `introspect` action that returns a comprehensive structured report of all internal charm state (event ledger, config, relations, storage, containers, leadership, secrets metadata, version, identity, goal-state) with optional section filtering. The action MUST succeed even when subsystems are unavailable, and MUST NOT include actual secret content.
 - **FR-025**: The OCI image MUST be built for at least amd64 and arm64 architectures. The charmcraft.yaml MUST declare both platforms so that the charm can be deployed on either architecture.
 - **FR-026**: The charm MUST declare at least two named filesystem storages: `data` (required, mounted at `/var/lib/norma`) and `logs` (optional, mounted at `/var/log/norma`). The `check-storage` action MUST accept a `name` parameter to query any declared storage independently.
+- **FR-027**: The charm MUST declare a `juju-info` provides endpoint to allow subordinate charms to attach. The endpoint MUST be optional — the charm MUST reach ActiveStatus without any subordinate integrated.
+- **FR-028**: The test-pebble-ops action MUST exercise `container.send_signal()` to send SIGHUP to a running service and verify the signal is received without restarting the process.
+- **FR-029**: Integration tests MUST verify forced application removal (`juju remove-application --force`) completes cleanly and the model returns to an empty state.
+- **FR-030**: Integration tests MUST verify storage import (`juju import-filesystem`) and attach-on-deploy (`juju deploy --attach-storage`) so that pre-existing PersistentVolumes can be reused by new units.
+- **FR-031**: CI MUST test both `charm-user: non-root` (primary) and `charm-user: sudoer` (variant) execution modes via build matrix to validate all Juju privilege levels for K8s charms.
+- **FR-032**: Integration tests MUST verify parallel secret operations — multiple user-created secrets granted and consumed concurrently — to ensure the charm correctly tracks independent secret IDs.
+- **FR-033**: The charm MUST support `juju expose` and `juju unexpose` operations. The test-networking action MUST report the exposed status. Integration tests MUST verify that exposing the application makes the workload port externally accessible and unexposing revokes access.
+- **FR-034**: Integration tests MUST verify model migration (`juju migrate`) by deploying the charm with state (config, secrets, storage data, relations), migrating the model to a second controller, and confirming all state is preserved and the charm reaches active status on the target controller.
+- **FR-035**: The introspect action MUST include a `goal-state` section that reports the planned state of the model as returned by the `goal-state` hook tool, showing units and their status and relations and their status.
+- **FR-036**: Integration tests MUST verify `juju model-config update-status-hook-interval` by setting a short interval and confirming the charm's event ledger records `update-status` events at the expected frequency.
+- **FR-037**: Integration tests MUST verify `juju ssh juju-norma-k8s/0` connectivity into the K8s pod and `juju deploy` with `--constraints` (e.g., `mem=512M cores=1`) to confirm Juju correctly sets K8s resource requests/limits on the charm pod.
 
 ### Non-Functional Requirements
 
@@ -685,6 +757,7 @@ check-storage output, then detach `logs` and verify `data` persists.
 - **NFR-002**: Integration tests MUST support testing against multiple Juju versions via the `JUJU_CHANNEL` environment variable (e.g., `3/stable`, `4/stable`).
 - **NFR-003**: Integration test environment setup MUST be idempotent -- safe to re-run on an already-configured machine with no side effects.
 - **NFR-004**: Integration tests MUST support reusing an existing deployment via `JUJU_MODEL` for fast local iteration, or creating a fresh temporary model for CI isolation.
+- **NFR-005**: The charm MUST be self-sufficient as a single replacement for ALL Juju K8s sidecar test charms. Every Juju K8s charm API surface (lifecycle events, Pebble operations, relations, storage, secrets, actions, status, networking, expose/unexpose, security, observability, subordinates, cross-model relations, model migration, goal-state, model-config, SSH access, K8s constraints) MUST be exercisable through this one charm. No additional test charms should be needed for Juju K8s CI validation.
 
 ### Key Entities
 
@@ -698,6 +771,7 @@ check-storage output, then detach `logs` and verify `data` persists.
 - The calibration charm is deployed on a Juju 3.6+ controller with a K8s cloud.
 - The OCI image for the workload container is a chiselled ROCK containing a purpose-built Go binary (single static executable, no runtime dependencies), source in `workload/`, built via rockcraft as part of this repo's CI. Multi-arch builds (amd64 + arm64) require cross-compilation support in CI (Go's `GOARCH` env var).
 - Cross-model relation testing requires access to two Juju models on the same controller.
+- Model migration testing (FR-034) requires access to two Juju controllers. CI may skip this test if only one controller is available.
 - COS integration testing requires the Prometheus, Grafana, and Loki charms to be available.
 - The charm name is `juju-norma-k8s`.
 - Integration test environment preparation is opt-in via `SETUP_ENVIRONMENT=1`. Without it, tests skip gracefully if prerequisites are missing.
@@ -707,7 +781,7 @@ check-storage output, then detach `logs` and verify `data` persists.
 
 ### Measurable Outcomes
 
-- **SC-001**: All 24 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
+- **SC-001**: All 25 user stories pass their acceptance scenarios when executed sequentially as a CI suite.
 - **SC-002**: Each user story can be tested independently by deploying the charm and running specific actions without requiring all other stories to be implemented.
 - **SC-003**: The charm reaches active status within 120 seconds of deployment on a standard MicroK8s cluster.
 - **SC-004**: Scaling from 1 to 3 units completes with all units active within 180 seconds.

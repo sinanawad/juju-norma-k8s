@@ -63,7 +63,11 @@ get-secret-info:
 
 check-storage:
   description: "Check storage status and data integrity"
-  # No params
+  params:
+    name:
+      type: string
+      description: "Storage name to check (data or logs)"
+      default: "data"
   # Results: {"attached": bool, "mount-point": str, "marker-exists": bool,
   #           "marker-content": {...}, "writable": bool}
 
@@ -85,7 +89,7 @@ trigger-notice:
     key:
       type: string
       description: "Notice key (e.g., canonical.com/norma/test)"
-      default: "canonical.com/norma/calibration-test"
+      default: "norma.dev/calibration-test"
     data:
       type: string
       description: "JSON-encoded key-value data payload"

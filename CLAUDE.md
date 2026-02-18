@@ -128,6 +128,9 @@ Feature specs, plans, and tasks live under `specs/<NNN>-<feature-name>/`. Refere
 GitHub Actions with `canonical/charming-actions`. PR workflow: lint → unit → lib-check → pack → integration. Release publishes to CharmHub edge. OCI workflow builds chiselled ROCKs. Dependabot covers Actions + uv deps.
 
 ## Active Technologies
-- Python 3.12 (ubuntu@24.04 base, `requires-python = ">=3.12"`) + ops 3.5.2, Go 1.22+ (workload binary) (001-calibration-charm)
+- Python 3.12+ (charm, ubuntu@24.04), Go 1.22+ (workload binary) (001-calibration-charm)
 - `ops` (charm framework), `ops[testing]` (unit tests), standard library `json` for serialization (001-calibration-charm)
-- Juju filesystem storage (PersistentVolume), peer relation data (001-calibration-charm)
+- Juju filesystem storage (PersistentVolume, two named storages: data + logs), peer relation data (001-calibration-charm)
+
+## Recent Changes
+- 001-calibration-charm: Added Python 3.12+ (charm, ubuntu@24.04), Go 1.22+ (workload binary) + `ops` (charm framework), `ops[testing]` (unit tests),
