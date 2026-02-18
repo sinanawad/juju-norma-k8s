@@ -1,7 +1,4 @@
-# Copyright 2026 Canonical Ltd.
-# See LICENSE file for licensing details.
-
-"""Unit tests for the norma-k8s charm using ops.testing (Scenario).
+"""Unit tests for the juju-norma-k8s charm using ops.testing (Scenario).
 
 Each test fires exactly one event against an immutable input State and
 asserts on the output State, per Constitution Principle VI.
@@ -92,7 +89,7 @@ class TestEventLedger:
             assert len(ledger) >= 1
             assert ledger[0]["event_name"] == "install"
             assert "timestamp" in ledger[0]
-            assert ledger[0]["unit_name"] == "norma-k8s/0"
+            assert ledger[0]["unit_name"] == "juju-norma-k8s/0"
 
     def test_config_changed_appended(self):
         ctx = ops.testing.Context(NormaK8sCharm)
@@ -141,7 +138,7 @@ class TestGetEventLogAction:
         # Verify the events field is valid JSON
         json.loads(ctx.action_results["events"])
         assert int(ctx.action_results["count"]) >= 0
-        assert ctx.action_results["unit"] == "norma-k8s/0"
+        assert ctx.action_results["unit"] == "juju-norma-k8s/0"
 
     def test_filter_by_event_name(self):
         ctx = ops.testing.Context(NormaK8sCharm)
@@ -601,7 +598,7 @@ class TestPeerRelation:
         out = ctx.run(ctx.on.config_changed(), state)
         out_peer = out.get_relation(peer.id)
         local_unit_data = out_peer.local_unit_data
-        assert local_unit_data["unit-name"] == "norma-k8s/0"
+        assert local_unit_data["unit-name"] == "juju-norma-k8s/0"
         assert local_unit_data["leader"] == "True"
 
     def test_leader_writes_app_data(self):
@@ -615,7 +612,7 @@ class TestPeerRelation:
         out = ctx.run(ctx.on.config_changed(), state)
         out_peer = out.get_relation(peer.id)
         app_data = out_peer.local_app_data
-        assert app_data["leader-unit"] == "norma-k8s/0"
+        assert app_data["leader-unit"] == "juju-norma-k8s/0"
         assert app_data["cluster-size"] == "1"
 
     def test_non_leader_does_not_write_app_data(self):
@@ -671,7 +668,7 @@ class TestPeerRelation:
         ctx = ops.testing.Context(NormaK8sCharm)
         peer = ops.testing.PeerRelation(
             endpoint="norma-peers",
-            peers_data={1: {"unit-name": "norma-k8s/1"}},
+            peers_data={1: {"unit-name": "juju-norma-k8s/1"}},
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER, NORMA_SECONDARY],
@@ -690,10 +687,10 @@ class TestPeerRelation:
         )
         peer = ops.testing.PeerRelation(
             endpoint="norma-peers",
-            local_unit_data={"unit-name": "norma-k8s/0", "leader": "True"},
+            local_unit_data={"unit-name": "juju-norma-k8s/0", "leader": "True"},
             local_app_data={
                 "cluster-size": "1",
-                "leader-unit": "norma-k8s/0",
+                "leader-unit": "juju-norma-k8s/0",
                 "secret-id": existing_secret.id,
             },
         )
@@ -706,10 +703,10 @@ class TestPeerRelation:
         out = ctx.run(ctx.on.config_changed(), state)
         out_peer = out.get_relation(peer.id)
         # Data should be identical — no new keys, no changed values
-        assert out_peer.local_unit_data == {"unit-name": "norma-k8s/0", "leader": "True"}
+        assert out_peer.local_unit_data == {"unit-name": "juju-norma-k8s/0", "leader": "True"}
         assert out_peer.local_app_data == {
             "cluster-size": "1",
-            "leader-unit": "norma-k8s/0",
+            "leader-unit": "juju-norma-k8s/0",
             "secret-id": existing_secret.id,
         }
 
@@ -727,7 +724,7 @@ class TestRelation:
         )
         out = ctx.run(ctx.on.relation_created(rel), state)
         out_rel = out.get_relation(rel.id)
-        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["unit-name"] == "juju-norma-k8s/0"
         assert out_rel.local_unit_data["role"] == "provider"
 
     def test_provider_relation_data_written(self):
@@ -739,7 +736,7 @@ class TestRelation:
         )
         out = ctx.run(ctx.on.relation_changed(rel), state)
         out_rel = out.get_relation(rel.id)
-        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["unit-name"] == "juju-norma-k8s/0"
         assert out_rel.local_unit_data["role"] == "provider"
 
     def test_requirer_relation_data_written(self):
@@ -751,7 +748,7 @@ class TestRelation:
         )
         out = ctx.run(ctx.on.relation_changed(rel), state)
         out_rel = out.get_relation(rel.id)
-        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["unit-name"] == "juju-norma-k8s/0"
         assert out_rel.local_unit_data["role"] == "requirer"
 
     def test_self_relation_both_endpoints(self):
@@ -775,8 +772,8 @@ class TestRelation:
         ctx = ops.testing.Context(NormaK8sCharm)
         rel = ops.testing.Relation(
             endpoint="calibration-provider",
-            remote_app_name="norma-k8s-peer",
-            remote_units_data={0: {"unit-name": "norma-k8s-peer/0"}},
+            remote_app_name="juju-norma-k8s-peer",
+            remote_units_data={0: {"unit-name": "juju-norma-k8s-peer/0"}},
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER, NORMA_SECONDARY],
@@ -786,13 +783,13 @@ class TestRelation:
         ledger = norma.read_event_ledger()
         departed_entries = [e for e in ledger if e["event_name"] == "relation-departed"]
         assert len(departed_entries) == 1
-        assert departed_entries[0]["extra"]["departing-unit"] == "norma-k8s-peer/0"
+        assert departed_entries[0]["extra"]["departing-unit"] == "juju-norma-k8s-peer/0"
 
     def test_get_relation_data_action_returns_structure(self):
         ctx = ops.testing.Context(NormaK8sCharm)
         rel = ops.testing.Relation(
             endpoint="calibration-provider",
-            local_unit_data={"unit-name": "norma-k8s/0", "role": "provider"},
+            local_unit_data={"unit-name": "juju-norma-k8s/0", "role": "provider"},
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER, NORMA_SECONDARY],
@@ -806,7 +803,7 @@ class TestRelation:
         result = json.loads(ctx.action_results["relations"])
         assert len(result) == 1
         assert result[0]["id"] == rel.id
-        assert "norma-k8s/0" in result[0]["units"]
+        assert "juju-norma-k8s/0" in result[0]["units"]
 
     def test_get_relation_data_action_empty_endpoint(self):
         ctx = ops.testing.Context(NormaK8sCharm)
@@ -845,7 +842,7 @@ class TestRelation:
         ctx = ops.testing.Context(NormaK8sCharm)
         rel = ops.testing.Relation(
             endpoint="calibration-provider",
-            local_unit_data={"unit-name": "norma-k8s/0", "role": "provider"},
+            local_unit_data={"unit-name": "juju-norma-k8s/0", "role": "provider"},
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER, NORMA_SECONDARY],
@@ -853,7 +850,7 @@ class TestRelation:
         )
         out = ctx.run(ctx.on.config_changed(), state)
         out_rel = out.get_relation(rel.id)
-        assert out_rel.local_unit_data == {"unit-name": "norma-k8s/0", "role": "provider"}
+        assert out_rel.local_unit_data == {"unit-name": "juju-norma-k8s/0", "role": "provider"}
 
     def test_relation_data_written_when_pebble_disconnected(self):
         """Relation data updates are independent of workload readiness."""
@@ -867,10 +864,10 @@ class TestRelation:
         )
         out = ctx.run(ctx.on.relation_changed(rel), state)
         out_rel = out.get_relation(rel.id)
-        assert out_rel.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_rel.local_unit_data["unit-name"] == "juju-norma-k8s/0"
         assert out_rel.local_unit_data["role"] == "provider"
         out_peer = out.get_relation(peer.id)
-        assert out_peer.local_unit_data["unit-name"] == "norma-k8s/0"
+        assert out_peer.local_unit_data["unit-name"] == "juju-norma-k8s/0"
 
 
 class TestClusterInfo:
@@ -887,19 +884,19 @@ class TestClusterInfo:
         ctx.run(ctx.on.action("get-cluster-info"), state)
         assert ctx.action_results["unit-count"] == "1"
         assert ctx.action_results["is-leader"] == "True"
-        assert ctx.action_results["leader"] == "norma-k8s/0"
+        assert ctx.action_results["leader"] == "juju-norma-k8s/0"
         units = json.loads(ctx.action_results["units"])
-        assert units == ["norma-k8s/0"]
+        assert units == ["juju-norma-k8s/0"]
 
     def test_three_unit_cluster_info(self):
         ctx = ops.testing.Context(NormaK8sCharm)
         peer = ops.testing.PeerRelation(
             endpoint="norma-peers",
             peers_data={
-                1: {"unit-name": "norma-k8s/1"},
-                2: {"unit-name": "norma-k8s/2"},
+                1: {"unit-name": "juju-norma-k8s/1"},
+                2: {"unit-name": "juju-norma-k8s/2"},
             },
-            local_app_data={"leader-unit": "norma-k8s/0"},
+            local_app_data={"leader-unit": "juju-norma-k8s/0"},
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
@@ -909,14 +906,14 @@ class TestClusterInfo:
         ctx.run(ctx.on.action("get-cluster-info"), state)
         assert ctx.action_results["unit-count"] == "3"
         units = json.loads(ctx.action_results["units"])
-        assert sorted(units) == ["norma-k8s/0", "norma-k8s/1", "norma-k8s/2"]
+        assert sorted(units) == ["juju-norma-k8s/0", "juju-norma-k8s/1", "juju-norma-k8s/2"]
 
     def test_non_leader_reports_leader_from_peer_data(self):
         ctx = ops.testing.Context(NormaK8sCharm)
         peer = ops.testing.PeerRelation(
             endpoint="norma-peers",
-            peers_data={1: {"unit-name": "norma-k8s/1"}},
-            local_app_data={"leader-unit": "norma-k8s/1"},
+            peers_data={1: {"unit-name": "juju-norma-k8s/1"}},
+            local_app_data={"leader-unit": "juju-norma-k8s/1"},
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
@@ -925,7 +922,7 @@ class TestClusterInfo:
         )
         ctx.run(ctx.on.action("get-cluster-info"), state)
         assert ctx.action_results["is-leader"] == "False"
-        assert ctx.action_results["leader"] == "norma-k8s/1"
+        assert ctx.action_results["leader"] == "juju-norma-k8s/1"
 
     def test_no_peer_relation_single_unit(self):
         ctx = ops.testing.Context(NormaK8sCharm)
@@ -935,7 +932,7 @@ class TestClusterInfo:
         ctx.run(ctx.on.action("get-cluster-info"), state)
         assert ctx.action_results["unit-count"] == "1"
         units = json.loads(ctx.action_results["units"])
-        assert units == ["norma-k8s/0"]
+        assert units == ["juju-norma-k8s/0"]
 
 
 class TestStorage:
@@ -984,7 +981,7 @@ class TestStorage:
         marker_file = fs / marker_path.lstrip("/")
         assert marker_file.exists()
         content = json.loads(marker_file.read_text())
-        assert content["created_by"] == "norma-k8s/0"
+        assert content["created_by"] == "juju-norma-k8s/0"
         assert "created_at" in content
         assert content["revision"] == 1
 
@@ -993,7 +990,7 @@ class TestStorage:
         ctx = ops.testing.Context(NormaK8sCharm)
         storage = ops.testing.Storage(name="data")
         existing_marker = json.dumps(
-            {"created_by": "norma-k8s/1", "created_at": "2026-01-01T00:00:00", "revision": 5}
+            {"created_by": "juju-norma-k8s/1", "created_at": "2026-01-01T00:00:00", "revision": 5}
         )
         norma_with_marker = ops.testing.Container(
             name="norma",
@@ -1012,7 +1009,7 @@ class TestStorage:
             # Read back within the context — marker should be unchanged
             content_str = container.pull(marker_path).read()
         content = json.loads(content_str)
-        assert content["created_by"] == "norma-k8s/1"
+        assert content["created_by"] == "juju-norma-k8s/1"
         assert content["revision"] == 5
 
     def test_check_storage_action_attached(self):
@@ -1020,7 +1017,7 @@ class TestStorage:
         ctx = ops.testing.Context(NormaK8sCharm)
         storage = ops.testing.Storage(name="data")
         existing_marker = json.dumps(
-            {"created_by": "norma-k8s/0", "created_at": "2026-01-01T00:00:00", "revision": 1}
+            {"created_by": "juju-norma-k8s/0", "created_at": "2026-01-01T00:00:00", "revision": 1}
         )
         norma_c = ops.testing.Container(
             name="norma",
@@ -1040,7 +1037,7 @@ class TestStorage:
         assert ctx.action_results["mount-point"] == norma.STORAGE_PATH
         assert ctx.action_results["marker-exists"] == "true"
         content = json.loads(ctx.action_results["marker-content"])
-        assert content["created_by"] == "norma-k8s/0"
+        assert content["created_by"] == "juju-norma-k8s/0"
         assert ctx.action_results["writable"] == "true"
 
     def test_check_storage_action_no_marker(self):
@@ -1450,7 +1447,7 @@ class TestNotices:
         """pebble-custom-notice event logs notice key in event ledger."""
         ctx = ops.testing.Context(NormaK8sCharm)
         notice = ops.testing.Notice(
-            key="canonical.com/norma/calibration-test",
+            key="norma.dev/calibration-test",
         )
         norma_c = ops.testing.Container(
             name="norma",
@@ -1465,7 +1462,7 @@ class TestNotices:
             ledger = mgr.charm._event_ledger
             notice_events = [e for e in ledger if e["event_name"] == "pebble-custom-notice"]
             assert len(notice_events) == 1
-            expected_key = "canonical.com/norma/calibration-test"
+            expected_key = "norma.dev/calibration-test"
             assert notice_events[0]["extra"]["notice-key"] == expected_key
 
     def test_trigger_notice_action_sends_notice(self):
@@ -1480,7 +1477,7 @@ class TestNotices:
                         command_prefix=[
                             "/charm/bin/pebble",
                             "notify",
-                            "canonical.com/norma/calibration-test",
+                            "norma.dev/calibration-test",
                         ]
                     ),
                 }
@@ -1491,7 +1488,7 @@ class TestNotices:
         )
         ctx.run(ctx.on.action("trigger-notice"), state)
         assert ctx.action_results["notice-sent"] == "true"
-        assert ctx.action_results["key"] == "canonical.com/norma/calibration-test"
+        assert ctx.action_results["key"] == "norma.dev/calibration-test"
 
     def test_trigger_notice_fails_disconnected(self):
         """trigger-notice fails when container is disconnected."""
@@ -1515,7 +1512,7 @@ class TestNotices:
                         command_prefix=[
                             "/charm/bin/pebble",
                             "notify",
-                            "canonical.com/norma/test",
+                            "norma.dev/test",
                             "foo=bar",
                         ]
                     ),
@@ -1528,12 +1525,12 @@ class TestNotices:
         ctx.run(
             ctx.on.action(
                 "trigger-notice",
-                params={"key": "canonical.com/norma/test", "data": '{"foo": "bar"}'},
+                params={"key": "norma.dev/test", "data": '{"foo": "bar"}'},
             ),
             state,
         )
         assert ctx.action_results["notice-sent"] == "true"
-        assert ctx.action_results["key"] == "canonical.com/norma/test"
+        assert ctx.action_results["key"] == "norma.dev/test"
 
     def test_trigger_notice_invalid_json_fails(self):
         """trigger-notice fails cleanly on invalid JSON data."""
@@ -1824,7 +1821,7 @@ class TestSecrets:
             {"password": "test-pw"},
             owner="app",
             label="calibration-password",
-            remote_grants={1: {"norma-k8s-remote"}},
+            remote_grants={1: {"juju-norma-k8s-remote"}},
         )
         peer = ops.testing.PeerRelation(
             endpoint="norma-peers",
@@ -1833,7 +1830,7 @@ class TestSecrets:
         broken_rel = ops.testing.Relation(
             endpoint="calibration-provider",
             id=1,
-            remote_app_name="norma-k8s-remote",
+            remote_app_name="juju-norma-k8s-remote",
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER, NORMA_SECONDARY],
@@ -2058,7 +2055,7 @@ class TestOCIResource:
                 {
                     "timestamp": "2026-01-01T00:00:00",
                     "event_name": "pebble-ready",
-                    "unit_name": "norma-k8s/0",
+                    "unit_name": "juju-norma-k8s/0",
                     "extra": {"container": "norma"},
                 }
             )
