@@ -231,19 +231,22 @@ juju deploy ./my-charm.charm my-app-peer --resource ...
 juju integrate my-app:provider my-app-peer:requirer
 ```
 
-### K8s subordinates crash on Juju 4 (WIP)
+### K8s subordinates don't work on any current Juju version
 
-**Symptom**: Integrating a subordinate charm on a K8s model causes the principal's agent to enter a crash loop:
-```
-ERROR juju.worker.uniter resolver loop error: getting principal unit machine
-information: unit "..." is not assigned to a machine in the model
-```
+**Symptom**: Integrating a subordinate charm on a K8s model fails differently per version:
 
-**Cause**: Juju 4's subordinate unit placement code assumes machine-based models. On K8s models (which have no machines), the lookup fails and the principal's uniter restarts repeatedly. The subordinate unit is never created.
+- **Juju 3.6**: Subordinate unit is created but agent hangs at `installing agent` / `allocating` with `waiting for container`. The subordinate agent never starts and the unit never becomes active. The principal remains active and unaffected.
+- **Juju 4.x**: Principal's uniter enters a crash loop with:
+  ```
+  ERROR juju.worker.uniter resolver loop error: getting principal unit machine
+  information: unit "..." is not assigned to a machine in the model
+  ```
 
-**Status**: Juju 4 WIP limitation. Works on Juju 3.6. Integration tests use `xfail(strict=False)` so they auto-detect when the fix lands.
+**Cause**: K8s subordinate agent installation is broken on all current Juju versions. On 3.6, the agent init container pattern fails silently (hangs). On 4.x, the placement code explicitly assumes machine-based models and crashes.
 
-**Workaround**: Test subordinate integration on Juju 3.6 only. On Juju 4, the `juju-info` provides endpoint is declared and unit-tested, but live subordinate deployment is deferred.
+**Status**: WIP limitation on all versions. Integration tests use unconditional `xfail(strict=False)` so they auto-detect when the fix lands on any version.
+
+**Workaround**: The `juju-info` provides endpoint is declared and unit-tested on the principal side. Live subordinate deployment is deferred until Juju K8s subordinate support is fixed. Force-remove (`--force --no-wait`) is required to clean up stuck subordinate apps.
 
 ### Broken relation — don't re-grant secrets
 
@@ -372,17 +375,17 @@ rockcraft.skopeo --insecure-policy copy \
 
 ---
 
-## Juju 4 Known Limitations (WIP)
+## Juju K8s Known Limitations (WIP)
 
-These are Juju 4.x features that are not yet implemented or have bugs on K8s models. Integration tests use `xfail(strict=False)` so they auto-detect when fixes land. All work correctly on Juju 3.6.
+These are Juju features that are not yet implemented or have bugs on K8s models. Integration tests use `xfail(strict=False)` so they auto-detect when fixes land.
 
 | Feature | Error / Symptom | Juju 3.6 | Juju 4.x |
 |---------|-----------------|----------|----------|
-| **K8s subordinates** | `getting principal unit machine information: unit "..." is not assigned to a machine` — placement assumes machine models | Works | Broken |
+| **K8s subordinates** | 3.6: agent hangs at "installing agent" / "allocating". 4.x: `getting principal unit machine information` crash | Broken (hangs) | Broken (crash) |
 | **`juju storage` / `juju list-storage`** | `not yet available in 4.0.2` | Works | Not implemented |
 | **`juju add-storage` / `juju detach-storage`** | `not supported on container models` | Works | Not supported |
 | **Pebble custom notices dispatch** | Notices exist in Pebble but the Juju agent never dispatches `pebble-custom-notice` events to the charm | Works | Not dispatched |
 | **OCI deploy race** (`juju/juju#21456`) | Unit starts before OCI resource is attached; pod shows image pull error | Works | Fixed in 4.0.2+ (patched build required) |
 | **Self-relations** | `juju integrate my-app:provider my-app:requirer` fails for same-app provides/requires | Works | Not supported |
 
-**CI strategy**: The CI matrix runs integration tests on Juju 3.6 (primary) where all features work. When Juju 4 is added to the matrix, affected tests are `xfail(strict=False)` — they run, report expected failure, and automatically flip to `xpass` when Juju fixes the issue. This provides zero-maintenance regression detection.
+**CI strategy**: The CI matrix runs integration tests on Juju 3.6 (primary). Features broken on all versions (K8s subordinates) use unconditional `xfail(strict=False)`. Features broken only on 4.x use conditional `xfail(JUJU_4, strict=False)`. Both patterns auto-detect fixes with zero maintenance.

@@ -4,33 +4,57 @@ Tests the principal charm's juju-info provides endpoint and the full
 subordinate lifecycle: deploy, integrate, verify cohabitation, introspect,
 remove relation, and cleanup.
 
-Juju 4 K8s limitation: subordinate unit placement fails with
-"getting principal unit machine information: unit ... is not assigned to a
-machine in the model" because the placement code assumes machine-based models.
-Tests are marked xfail(strict=False) on Juju 4 so they auto-detect when
-the fix lands.
+K8s subordinate limitation: subordinate agent installation fails on all
+current Juju versions:
+  - Juju 3.6: agent hangs at "installing agent" / "allocating" indefinitely
+  - Juju 4.x: crashes with "getting principal unit machine information:
+    unit ... is not assigned to a machine in the model"
+
+Tests are marked xfail(strict=False) so they auto-detect when the fix lands
+on any version. Timeouts are kept short (60s) to avoid wasting CI time on
+known failures.
 """
 
 import contextlib
 import json
+import logging
 
 import jubilant
 import pytest
 
-from .conftest import JUJU_4
+logger = logging.getLogger(__name__)
 
 APP = "juju-norma-k8s"
 SUB_APP = "norma-sub"
+
+# K8s subordinates don't work on any current Juju version — mark unconditionally.
+_K8S_SUB_XFAIL = pytest.mark.xfail(
+    reason="K8s subordinate agent install hangs (3.6) or crashes (4.x)",
+    strict=False,
+)
+
+
+def _force_remove_subordinate(juju: jubilant.Juju) -> None:
+    """Best-effort removal of the subordinate app.
+
+    Uses --force --no-wait to avoid hanging on stuck subordinate agents.
+    Waits up to 60s for the app to disappear.
+    """
+    status = juju.status()
+    if SUB_APP not in status.apps:
+        return
+    with contextlib.suppress(jubilant.CLIError):
+        juju.remove_relation(f"{APP}:juju-info", f"{SUB_APP}:juju-info")
+    with contextlib.suppress(jubilant.CLIError):
+        juju.cli("remove-application", SUB_APP, "--force", "--no-wait", "--no-prompt")
+    with contextlib.suppress(TimeoutError):
+        juju.wait(lambda s: SUB_APP not in s.apps, timeout=60)
 
 
 class TestSubordinateIntegration:
     """US25: Subordinate charm lifecycle via juju-info endpoint."""
 
-    @pytest.mark.xfail(
-        JUJU_4,
-        reason="Juju 4 WIP: K8s subordinate placement assumes machine models",
-        strict=False,
-    )
+    @_K8S_SUB_XFAIL
     def test_subordinate_deployed_and_integrated(
         self,
         juju: jubilant.Juju,
@@ -48,8 +72,8 @@ class TestSubordinateIntegration:
         with contextlib.suppress(jubilant.CLIError):
             juju.integrate(f"{APP}:juju-info", f"{SUB_APP}:juju-info")
 
-        # Wait for both apps to settle.
-        juju.wait(jubilant.all_active, timeout=300)
+        # Wait for both apps to settle (short timeout — known to hang).
+        juju.wait(jubilant.all_active, timeout=120)
 
         status = juju.status()
         principal_units = list(status.apps[APP].units.keys())
@@ -59,11 +83,7 @@ class TestSubordinateIntegration:
             f"1:1 mapping: {len(principal_units)} principal, {len(sub_units)} subordinate"
         )
 
-    @pytest.mark.xfail(
-        JUJU_4,
-        reason="Juju 4 WIP: K8s subordinate placement assumes machine models",
-        strict=False,
-    )
+    @_K8S_SUB_XFAIL
     def test_subordinate_scales_with_principal(
         self,
         juju: jubilant.Juju,
@@ -79,7 +99,7 @@ class TestSubordinateIntegration:
             pytest.skip("Subordinate not deployed (depends on previous test)")
 
         juju.add_unit(APP, num_units=2)
-        juju.wait(jubilant.all_active, timeout=300)
+        juju.wait(jubilant.all_active, timeout=120)
 
         status = juju.status()
         assert len(status.apps[APP].units) == 3
@@ -89,14 +109,10 @@ class TestSubordinateIntegration:
         juju.remove_unit(APP, num_units=2)
         juju.wait(
             lambda s: len(s.apps[APP].units) == 1,
-            timeout=300,
+            timeout=120,
         )
 
-    @pytest.mark.xfail(
-        JUJU_4,
-        reason="Juju 4 WIP: K8s subordinate placement assumes machine models",
-        strict=False,
-    )
+    @_K8S_SUB_XFAIL
     def test_introspect_shows_subordinate_relation(
         self,
         juju: jubilant.Juju,
@@ -116,11 +132,7 @@ class TestSubordinateIntegration:
         assert "juju-info" in relations, "juju-info endpoint should appear in relations"
         assert len(relations["juju-info"]) >= 1
 
-    @pytest.mark.xfail(
-        JUJU_4,
-        reason="Juju 4 WIP: K8s subordinate placement assumes machine models",
-        strict=False,
-    )
+    @_K8S_SUB_XFAIL
     def test_relation_removal_cleans_up(
         self,
         juju: jubilant.Juju,
@@ -156,22 +168,18 @@ class TestSubordinateIntegration:
         assert len(events) >= 1, "relation-broken should be in event ledger"
 
         # Cleanup subordinate app.
-        status = juju.status()
-        if SUB_APP in status.apps:
-            juju.cli("remove-application", SUB_APP, "--no-prompt")
-            juju.wait(lambda s: SUB_APP not in s.apps, timeout=120)
+        _force_remove_subordinate(juju)
 
     def test_active_without_subordinate(self, juju: jubilant.Juju):
-        """AC5: Principal reaches active status without subordinate integration."""
-        # Ensure no subordinate relation exists.
-        status = juju.status()
-        if SUB_APP in status.apps:
-            with contextlib.suppress(jubilant.CLIError):
-                juju.remove_relation(f"{APP}:juju-info", f"{SUB_APP}:juju-info")
-            juju.cli("remove-application", SUB_APP, "--no-prompt")
-            juju.wait(lambda s: SUB_APP not in s.apps, timeout=120)
+        """AC5: Principal reaches active status without subordinate integration.
 
-        juju.wait(jubilant.all_active, timeout=60)
+        This test verifies the principal is active on its own. If a stuck
+        subordinate exists from previous tests, force-remove it first.
+        """
+        _force_remove_subordinate(juju)
+
+        # Check principal unit directly — don't use all_active which would
+        # also check any lingering subordinate units.
         status = juju.status()
-        unit = next(iter(status.apps[APP].units.values()))
-        assert unit.workload_status.current == "active"
+        principal_unit = next(iter(status.apps[APP].units.values()))
+        assert principal_unit.workload_status.current == "active"
