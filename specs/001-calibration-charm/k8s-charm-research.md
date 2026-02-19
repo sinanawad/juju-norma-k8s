@@ -555,7 +555,7 @@ The calibration charm already supports these Juju primitives:
 | Relations (peer) | `norma-peers` for cluster state | test_scaling, test_relations |
 | Relations (custom interface) | `calibration-provider`/`calibration-requirer` for self-relation pattern | test_relations, test_cmr |
 | Relations (COS) | `metrics-endpoint`, `grafana-dashboard`, `log-proxy` | test_observability |
-| Relations (subordinate) | `juju-info` provides endpoint | test_subordinate |
+| Relations (juju-info) | `juju-info` provides endpoint (standard) | — |
 | Config (all types) | string, int, float, boolean, secret | test_config |
 | Scaling (add/remove units) | Peer relation tracks cluster, leader election | test_scaling |
 | Actions (18 total) | introspect, get-event-log, set-status, toggle-health, test-pebble-ops, trigger-notice, check-storage, get-version, test-defer, etc. | test_introspect, test_pebble_ops, test_health_checks |
@@ -572,7 +572,6 @@ The calibration charm already supports these Juju primitives:
 | Event ledger | Full event history with metadata, filterable | test_lifecycle, all tests |
 | Debug-log / introspect | Comprehensive 9-section JSON report | test_introspect |
 | HTTP workload | Go binary with `/health`, `/version`, `/ready`, `/metrics`, `/toggle-health` | test_health_checks |
-| Subordinate variant | Same code, `subordinate: true`, shares principal pod | test_subordinate |
 | CMR-compatible | calibration-provider can be offered cross-model | test_cmr |
 
 ### Per-Suite Replacement Verdict
@@ -600,7 +599,7 @@ The calibration charm already supports these Juju primitives:
 
 **Modifications needed:**
 - **credential_get**: Would need a `hit-k8s-api` action that calls `credential-get` hook tool and then hits the K8s API. Low complexity (~20 lines), but requires `--trust --scope=cluster` at deploy time. Alternatively, the `check-security` action already detects trust availability -- extend it to actually call the K8s API.
-- **sudoer variant**: Would need a third charmcraft overlay that runs with `charm-user: root` and sudo capabilities. Different security posture from principal/subordinate variants.
+- **sudoer variant**: Would need a second charmcraft overlay that runs with `charm-user: root` and sudo capabilities. Different security posture from the principal variant.
 
 **Charms this replaces:** snappass-test (2 tests), juju-qa-pebble-notices (1 test), juju-qa-pebble-checks (1 test), sidecar-non-root (1 test) = 5 of 7 tests.
 

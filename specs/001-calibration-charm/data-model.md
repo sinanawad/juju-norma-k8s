@@ -114,7 +114,7 @@ Content: `{"created_by": "<unit_name>", "created_at": "<ISO timestamp>", "revisi
 | `calibration-provider` | `calibration` | true | — | Testing provides/requires and self-relation (US7) |
 | `metrics-endpoint` | `prometheus_scrape` | true | — | COS metrics (US18) |
 | `grafana-dashboard` | `grafana_dashboard` | true | — | COS dashboards (US18) |
-| `juju-info` | `juju-info` | true | — | Subordinate attachment point (US25) |
+| `juju-info` | `juju-info` | true | — | Standard Juju info endpoint |
 
 ### Requires
 
@@ -225,22 +225,6 @@ The `introspect` action returns a flat key-value map where each key is a section
 When a collector fails: `{"status": "unavailable", "reason": "Description of what went wrong"}`
 
 ---
-
-## Subordinate Overlay (US25)
-
-The subordinate variant is built from the same source tree using a charmcraft overlay file.
-
-### `charmcraft-subordinate.yaml` delta from `charmcraft.yaml`
-
-| Field | Principal | Subordinate |
-|-------|-----------|-------------|
-| `subordinate` | absent | `true` |
-| `juju-info` | `provides: { interface: juju-info }` | `requires: { interface: juju-info, scope: container }` |
-| `containers` | two containers defined | removed (subordinates share principal's pod) |
-| `resources` | `juju-norma-image` OCI | removed |
-| `storage` | `data` + `logs` | removed |
-
-The subordinate overlay keeps all other fields (config, peers, calibration endpoints, actions, charm-libs) identical. This means the subordinate charm code is the same — it just runs inside the principal's pod.
 
 ## Edge Case Assignments (from spec)
 

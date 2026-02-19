@@ -13,10 +13,6 @@ ports). Every feature is testable independently via dedicated actions, making
 the charm suitable as a self-sufficient CI validation suite for Juju itself —
 replacing ALL existing Juju K8s sidecar test charms (NFR-005).
 
-The charm also serves as the principal for subordinate charm testing (US25),
-using a charmcraft overlay (`charmcraft-subordinate.yaml`) to repack the same
-source as a subordinate variant.
-
 ## Technical Context
 
 **Language/Version**: Python 3.12+ (charm, ubuntu@24.04), Go 1.22+ (workload binary)
@@ -26,7 +22,7 @@ source as a subordinate variant.
 **Storage**: Juju filesystem storage (PersistentVolume, two named storages: data + logs), peer relation data
 **Testing**: ops.testing/Scenario (unit), jubilant (integration), ruff (lint)
 **Target Platform**: Kubernetes (Juju 3.6+, ubuntu@24.04, MicroK8s)
-**Project Type**: Single project (charm + co-located Go workload + subordinate overlay)
+**Project Type**: Single project (charm + co-located Go workload)
 **Performance Goals**: Active in <120s, scale 1->3 in <180s, actions <30s
 **Constraints**: Non-root execution, chiselled ROCK, no StoredState, no
 event.defer() for control flow
@@ -71,7 +67,6 @@ specs/001-calibration-charm/
 
 ```text
 charmcraft.yaml                    # principal charm metadata (charm-user: non-root)
-charmcraft-subordinate.yaml        # overlay: subordinate=true, juju-info requires scope:container
 pyproject.toml
 uv.lock
 Makefile
@@ -119,15 +114,12 @@ tests/
     test_oci_resource.py
     test_introspect.py
     test_multi_storage.py
-    test_subordinate.py
 ```
 
 **Structure Decision**: Single project layout per constitution. The `workload/`
 directory is co-located at repo root for the Go binary. The charm follows the
 standard `src/charm.py` + `src/norma.py` separation. Integration tests are
-organized one file per user story for independent execution. The subordinate
-overlay (`charmcraft-subordinate.yaml`) lives at repo root alongside the
-principal `charmcraft.yaml`.
+organized one file per user story for independent execution.
 
 ## Complexity Tracking
 
@@ -156,20 +148,11 @@ Every event (config-changed, relation-changed, pebble-ready, etc.) triggers `_re
 
 Dedicated handlers are allowed **only** for: `stop`, `remove`, action events, and secret rotation/expiration.
 
-### Subordinate Overlay Strategy (US25)
-
-The test subordinate reuses the same charm source with a charmcraft overlay:
-
-- **`charmcraft-subordinate.yaml`**: Sets `subordinate: true`, flips `juju-info` from provides to requires with `scope: container`, removes containers/resources/storage sections (subordinates share the principal's pod).
-- **Build**: `charmcraft pack --project-dir . --charm-config charmcraft-subordinate.yaml` (or copy overlay as charmcraft.yaml in a temp dir and pack).
-- **Principal changes**: Add `juju-info` provides endpoint to `charmcraft.yaml` (FR-027). No code changes needed — the charm already handles arbitrary relations via `_reconcile()`.
-
 ### Build Variants (CI Matrix)
 
 | Variant | charmcraft.yaml | charm-user | Purpose |
 |---------|----------------|------------|---------|
 | Primary (default) | `charmcraft.yaml` | `non-root` (UID 170) | Production artifact, all standard tests |
-| Subordinate | `charmcraft-subordinate.yaml` | `non-root` | US25: subordinate relation lifecycle |
 | Sudoer | `charmcraft-sudoer.yaml` | `sudoer` (UID 171) | FR-031: validate Juju sudoer privilege mode |
 
 ### xfail Strategy for K8s Storage CLI Limitations
@@ -189,11 +172,10 @@ US10 AC4 (`attach-storage`), AC6 (`import-filesystem`), and AC7 (`deploy --attac
 | `calibration-provider` | provides | `calibration` | — | US7: provides/requires relations |
 | `metrics-endpoint` | provides | `prometheus_scrape` | — | US18: COS metrics |
 | `grafana-dashboard` | provides | `grafana_dashboard` | — | US18: COS dashboards |
-| `juju-info` | provides | `juju-info` | — | US25: subordinate attachment point |
+| `juju-info` | provides | `juju-info` | — | Standard Juju info endpoint |
 | `calibration-requirer` | requires | `calibration` | — | US7: provides/requires relations |
 | `log-proxy` | requires | `loki_push_api` | — | US18: COS log forwarding |
 
-Note: The `juju-info` provides endpoint does NOT specify `scope: container` — scope is a requires-side attribute set in the subordinate's metadata.
 
 ### Storage Definitions
 
@@ -248,7 +230,7 @@ Note: The `juju-info` provides endpoint does NOT specify `scope: container` — 
 | 25: US22 (Introspect) | P22 | US1-US9 | Pending |
 | 26: US23 (Multi-Arch) | P23 | Phase 2 | Pending |
 | 27: US24 (Multi-Storage) | P24 | US10 | Pending |
-| 28: US25 (Subordinate) | P25 | FR-027 (juju-info endpoint) | **New** |
+| ~~28: US25 (Subordinate)~~ | — | — | REMOVED (K8s subordinates unsupported) |
 | O1: CI Pipeline | — | Phase 1 | Partial (ci.yaml exists) |
 | O2: Integration Tests | — | Corresponding stories | Partial (files exist) |
 | 24: Polish | — | All stories | Pending |
@@ -268,7 +250,6 @@ Note: The `juju-info` provides endpoint does NOT specify `scope: container` — 
 | US21 (Resource) | US2 (Pebble) | Resource refresh triggers pebble-ready |
 | US22 (Introspect) | US1-US9 | Collectors read data populated by prior stories |
 | US24 (Multi-Storage) | US10 (Storage) | Extends existing storage handling |
-| US25 (Subordinate) | FR-027 | Requires juju-info provides endpoint |
 | US26 (Publication) | O1 (CI) | Release workflow extends CI pipeline |
 | All stories | US1 (Lifecycle) | Event ledger used for verification |
 
@@ -278,7 +259,7 @@ These requirements were added after the original planning and need task coverage
 
 | Requirement | Story | Description |
 |-------------|-------|-------------|
-| FR-027 | US25 | Add `juju-info` provides endpoint for subordinate attachment |
+| FR-027 | — | `juju-info` provides endpoint (standard interface, retained) |
 | FR-028 | US12 | Add `container.send_signal()` to test-pebble-ops action |
 | FR-029 | US1 | Integration test for `juju remove-application --force` |
 | FR-030 | US10 | Integration tests for `import-filesystem` and `deploy --attach-storage` (xfail) |

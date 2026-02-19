@@ -265,50 +265,11 @@ self._loki = LogForwarder(
 
 ---
 
-## R7: Subordinate Charm Overlay Strategy (US25)
+## ~~R7: Subordinate Charm Overlay Strategy (US25)~~ (REMOVED)
 
-**Decision**: Reuse the same juju-norma-k8s charm source packed with a different
-charmcraft overlay (`charmcraft-subordinate.yaml`) that adds `subordinate: true`
-and flips the `juju-info` endpoint from provides to requires with
-`scope: container`.
-
-**Rationale**: Avoids maintaining a separate charm codebase. Same code, same
-actions, same logic — different packaging. The subordinate variant shares the
-principal's pod and Pebble environment. CI packs both variants from the same
-source tree.
-
-**Key findings**:
-
-- **`scope: container`** is a requires-side attribute only. The principal's
-  `juju-info` provides endpoint does NOT specify scope.
-- **Subordinate packaging**: A subordinate charm cannot declare `containers`,
-  `resources`, or `storage` — it shares the principal's pod.
-- **Build approach**: Either use `charmcraft pack -c charmcraft-subordinate.yaml`
-  if supported, or copy the overlay as `charmcraft.yaml` in a temp directory.
-- **Principal changes**: Only needs `juju-info` provides endpoint added to
-  `charmcraft.yaml` (FR-027). No code changes required.
-
-### Overlay Delta
-
-```yaml
-# charmcraft-subordinate.yaml — only fields that differ from principal
-subordinate: true
-
-provides:
-  # Remove juju-info from provides
-  calibration-provider: ...
-  metrics-endpoint: ...
-  grafana-dashboard: ...
-
-requires:
-  juju-info:
-    interface: juju-info
-    scope: container
-  calibration-requirer: ...
-  log-proxy: ...
-
-# Omit: containers, resources, storage (subordinates share principal's pod)
-```
+**Removed**: K8s subordinate charms are unsupported by Juju (machine-model only).
+US25 has been removed from the spec. The `juju-info` provides endpoint is
+retained as a standard interface.
 
 ---
 
@@ -401,7 +362,7 @@ constraints, and model-config that a charm-centric view would miss.
 | Secret config type | `type: secret`, resolve with `model.get_secret()` |
 | COS library versions | prometheus_scrape v0, grafana_dashboard v0, loki_push_api v1 |
 | Introspect action format | Per-section JSON strings in action results, private collector methods |
-| Subordinate strategy | Overlay charmcraft-subordinate.yaml, same source, no separate codebase |
+| ~~Subordinate strategy~~ | REMOVED — K8s subordinates unsupported by Juju (machine-model only) |
 | K8s storage CLI | xfail(strict=False) for attach-storage, import-filesystem, deploy --attach-storage |
 | charm-user variants | CI build matrix: non-root (primary) + sudoer (overlay) |
 | Juju K8s coverage gaps | 5 new FRs: expose/unexpose, model migration, goal-state, update-status-interval, ssh+constraints |

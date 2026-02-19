@@ -22,7 +22,7 @@
 
 ### Session 2026-02-18
 
-- Q: Where does the test subordinate charm for US25 come from? → A: Reuse the same juju-norma-k8s charm packed with a different charmcraft.yaml overlay that adds `subordinate: true` and changes the `juju-info` endpoint to `requires` with `scope: container`. This avoids maintaining a separate charm codebase — same code, different packaging.
+- Q: Where does the test subordinate charm for US25 come from? → A: ~~Reuse the same juju-norma-k8s charm packed with a different charmcraft.yaml overlay.~~ **REMOVED**: US25 removed — K8s subordinates are unsupported by Juju (machine-model only).
 - Q: How should US10 AC4/AC6/AC7 (attach-storage, import-filesystem, deploy --attach-storage) be handled given Juju's known K8s limitations? → A: Write tests with `xfail(strict=False)` — tests exist and run, marked as expected failures until Juju implements K8s support. This documents expected behavior and auto-detects when support lands.
 
 ### Session 2026-02-19
@@ -660,41 +660,15 @@ check-storage output, then detach `logs` and verify `data` persists.
 
 ---
 
-### User Story 25 - Subordinate Charm Integration (Priority: P25)
+### ~~User Story 25 - Subordinate Charm Integration~~ (REMOVED)
 
-A Juju CI engineer deploys a subordinate charm alongside the calibration
-charm to verify subordinate relation mechanics: automatic unit cohabitation,
-`scope: container` relations, shared Pebble access, and subordinate lifecycle
-events. This exercises Juju's subordinate deployment model which is used
-extensively by observability agents (grafana-agent, landscape-client) and
-security charms in production.
-
-The test subordinate is the same juju-norma-k8s charm repacked with a
-charmcraft overlay (`charmcraft-subordinate.yaml`) that sets `subordinate: true`
-and changes the `juju-info` endpoint from provides to requires with
-`scope: container`. This reuses the existing charm code — same binary, same
-Pebble layers, different packaging. CI packs both variants (principal +
-subordinate) from the same source tree.
-
-**Why this priority**: Juju CI tests subordinate attachment, removal, and
-lifecycle event ordering. The calibration charm currently has no subordinate
-endpoint, so these code paths are untested. Adding a `juju-info` provides
-endpoint enables any subordinate to attach, and the overlay-based subordinate
-variant validates the full lifecycle without maintaining a separate codebase.
-
-**Independent Test**: Deploy the principal charm, deploy the subordinate
-variant (packed from the same source with the overlay), integrate them, verify
-the subordinate unit appears colocated, run an action on the principal to
-confirm the subordinate relation data is visible, then remove the relation and
-verify cleanup.
-
-**Acceptance Scenarios**:
-
-1. **Given** the charm declares a `juju-info` provides endpoint, **When** a subordinate charm (which declares `juju-info` requires with `scope: container`) is integrated, **Then** one subordinate unit is automatically created per principal unit and they share the same pod.
-2. **Given** a subordinate is integrated, **When** the principal is scaled to 3 units, **Then** 3 subordinate units are automatically created (1:1 mapping).
-3. **Given** a subordinate is integrated, **When** the `introspect` action is run with `sections=relations`, **Then** the subordinate relation appears in the relations output with the subordinate's unit data visible.
-4. **Given** a subordinate is integrated, **When** the relation is removed, **Then** `relation-broken` fires on the principal, the subordinate units are removed, and the principal returns to active status.
-5. **Given** the charm is deployed without any subordinate integration, **When** status is checked, **Then** the charm reaches active status — the subordinate endpoint is optional.
+**Removed**: Juju subordinate charms are documented as machine-model only
+(see [Juju charm reference](https://documentation.ubuntu.com/juju/latest/reference/charm/)).
+K8s models do not support subordinate placement. Verified experimentally:
+Juju 4.x crashes the principal uniter; Juju 3.6 hangs the subordinate at
+"allocating". No K8s subordinate charms exist on CharmHub or in Juju CI tests.
+The `juju-info` provides endpoint is retained as a standard interface but
+subordinate-specific code, overlay, tests, and CI jobs have been removed.
 
 ---
 
@@ -793,7 +767,7 @@ verify cleanup.
 - **FR-024**: The charm MUST provide a single `introspect` action that returns a comprehensive structured report of all internal charm state (event ledger, config, relations, storage, containers, leadership, secrets metadata, version, identity, goal-state) with optional section filtering. The action MUST succeed even when subsystems are unavailable, and MUST NOT include actual secret content.
 - **FR-025**: The OCI image MUST be built for at least amd64 and arm64 architectures. The charmcraft.yaml MUST declare both platforms so that the charm can be deployed on either architecture.
 - **FR-026**: The charm MUST declare at least two named filesystem storages: `data` (required, mounted at `/var/lib/norma`) and `logs` (optional, mounted at `/var/log/norma`). The `check-storage` action MUST accept a `name` parameter to query any declared storage independently.
-- **FR-027**: The charm MUST declare a `juju-info` provides endpoint to allow subordinate charms to attach. The endpoint MUST be optional — the charm MUST reach ActiveStatus without any subordinate integrated.
+- **FR-027**: The charm MUST declare a `juju-info` provides endpoint (standard Juju interface). The endpoint MUST be optional — the charm MUST reach ActiveStatus without any relation on this endpoint.
 - **FR-028**: The test-pebble-ops action MUST exercise `container.send_signal()` to send SIGHUP to a running service and verify the signal is received without restarting the process.
 - **FR-029**: Integration tests MUST verify forced application removal (`juju remove-application --force`) completes cleanly and the model returns to an empty state.
 - **FR-030**: Integration tests MUST verify storage import (`juju import-filesystem`) and attach-on-deploy (`juju deploy --attach-storage`) so that pre-existing PersistentVolumes can be reused by new units.
@@ -806,7 +780,7 @@ verify cleanup.
 - **FR-037**: Integration tests MUST verify `juju ssh juju-norma-k8s/0` connectivity into the K8s pod and `juju deploy` with `--constraints` (e.g., `mem=512M cores=1`) to confirm Juju correctly sets K8s resource requests/limits on the charm pod.
 - **FR-038**: The ROCK image MUST include a minimal POSIX shell (`/bin/sh` via busybox) to support `juju exec` and `juju ssh` operations that require shell interpretation inside the workload container. This enables the charm to replace alertmanager-k8s and snappass-test in the secrets_k8s suite where `juju exec --unit ... secret-add` is used.
 - **FR-039**: The `check-security` action MUST exercise the `credential-get` hook tool to retrieve K8s cloud credentials, hits the K8s API using those credentials, and reports the result. This enables replacement of juju-qa-credential-get-k8s in the sidecar suite. The action MUST require `--trust` at deploy time and fail gracefully without it.
-- **FR-040**: The sudoer build variant MUST be packaged as a charmcraft overlay (`charmcraft-sudoer.yaml`) following the same pattern as the subordinate overlay (`charmcraft-subordinate.yaml`), producing a third `.charm` artifact from the same source tree. CI packs all three variants (principal, subordinate, sudoer) in the pack step.
+- **FR-040**: The sudoer build variant MUST be packaged as a charmcraft overlay (`charmcraft-sudoer.yaml`), producing a second `.charm` artifact from the same source tree. CI packs both variants (principal, sudoer) in the pack step.
 - **FR-041**: A `publish-oci.yaml` GitHub Actions workflow MUST build the ROCK image and push it to `ghcr.io/<owner>/juju-norma:<version>` with public visibility. The workflow MUST trigger on pushes to main that modify `rockcraft.yaml` or `workload/` files, and on version tags (`v*`). The image MUST be pushed with both the version tag and `latest`.
 - **FR-042**: A `release.yaml` GitHub Actions workflow MUST pack the charm with the public OCI `upstream-source` pointing to ghcr.io, run the full test suite, and upload the charm to CharmHub edge channel via `canonical/charming-actions/upload-charm`. The workflow MUST trigger on version tags (`v*`). Library publishing via `canonical/charming-actions/release-libraries` MUST run on pushes to main.
 - **FR-043**: A `dependabot.yml` configuration MUST be present to create weekly PRs for outdated GitHub Actions versions and uv dependency updates.

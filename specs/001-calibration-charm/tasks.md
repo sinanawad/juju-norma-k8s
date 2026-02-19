@@ -427,19 +427,11 @@
 
 ---
 
-## Phase 28: US25 — Subordinate Charm Integration (NEW)
+## ~~Phase 28: US25 — Subordinate Charm Integration~~ (REMOVED)
 
-**Purpose**: Verify subordinate relation mechanics using a charmcraft overlay variant
-
-**Dependencies**: FR-027 (juju-info provides endpoint)
-
-- [ ] T103 [US25] Add `juju-info` provides endpoint to `charmcraft.yaml` with `interface: juju-info` and `optional: true`. This enables any subordinate charm to attach. No code changes in `src/charm.py` needed — the reconciler already handles arbitrary relations. In `charmcraft.yaml`
-- [ ] T104 [US25] Create `charmcraft-subordinate.yaml` at repo root: copy from `charmcraft.yaml`, add `subordinate: true`, move `juju-info` from provides to requires with `scope: container`, remove `containers`, `resources`, and `storage` sections (subordinates share the principal's pod). Keep all other fields (config, peers, calibration endpoints, actions, charm-libs) identical.
-- [ ] T105 [P] [US25] Add unit tests for juju-info provides endpoint in `tests/unit/test_charm.py`: verify charm reaches ActiveStatus without any subordinate integrated (FR-027), verify juju-info relation events are handled by reconciler
-- [ ] T106 [P] [US25] Create `tests/integration/test_subordinate.py` with jubilant tests: `TestSubordinate` class testing AC1 (subordinate unit created per principal unit), AC3 (introspect shows subordinate relation), AC4 (relation removal cleans up), AC5 (principal active without subordinate). AC2 (scale to 3 units -> 3 subordinate units) as separate test. Pack subordinate variant using `charmcraft pack` with overlay, deploy alongside principal.
-- [ ] T107 [US25] CLI Acceptance (Constitution VIII): Deploy principal, pack subordinate overlay, deploy subordinate, `juju integrate juju-norma-k8s:juju-info norma-sub:juju-info`, verify subordinate unit colocated, run `juju run juju-norma-k8s/0 introspect sections=relations` -> verify subordinate relation visible, remove relation -> verify cleanup and principal returns to active
-
-**Checkpoint**: Subordinate lifecycle fully validated — attachment, scaling, introspection, removal
+**Removed**: US25 removed — K8s subordinate charms are unsupported by Juju (machine-model only).
+Tasks T103-T107 are no longer applicable. The `juju-info` provides endpoint is retained in
+`charmcraft.yaml` as a standard interface (FR-027).
 
 ---
 
@@ -484,9 +476,9 @@
 
 ### FR-040: Sudoer Overlay (extends US17)
 
-Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows the subordinate overlay pattern.
+Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms the overlay pattern.
 
-- [ ] T134 [US17] Update CI pack step in `.github/workflows/ci.yaml` to pack all three variants (principal, subordinate, sudoer) and upload as artifacts. The sudoer variant follows the same copy-overlay-and-pack pattern as the subordinate variant.
+- [ ] T134 [US17] Update CI pack step in `.github/workflows/ci.yaml` to pack both variants (principal, sudoer) and upload as artifacts. The sudoer variant uses a copy-overlay-and-pack pattern.
 
 **Checkpoint**: All new FRs (FR-028 through FR-040) have implementation and test coverage
 
@@ -499,7 +491,7 @@ Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows 
 **Dependencies**: None (can be done at any time)
 
 - [X] T075 [P] Create `.github/workflows/ci.yaml` with: trigger on push/PR to main and feature branches; jobs for `lint`, `unit` (with coverage), `pack` (charmcraft pack), `build-rock` (rockcraft pack + push to registry), `integration` (matrix for Juju channels, SETUP_ENVIRONMENT=1); use `ubuntu-24.04` runner, `astral-sh/setup-uv` action
-- [ ] T076 [P] Add subordinate and sudoer pack jobs to CI: pack subordinate variant from `charmcraft-subordinate.yaml`, pack sudoer variant from `charmcraft-sudoer.yaml`, make artifacts available to integration tests
+- [ ] T076 [P] Add sudoer pack job to CI: pack sudoer variant from `charmcraft-sudoer.yaml`, make artifacts available to integration tests
 
 **Checkpoint**: CI pipeline operational with multi-variant builds
 
@@ -546,7 +538,7 @@ Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows 
 - [ ] T079 [P] Run `make lint` (ruff check and format) and fix all lint issues across `src/charm.py`, `src/norma.py`, and `tests/`
 - [ ] T080 [P] Run `make unit` and verify all unit tests pass with coverage report; ensure `tests/unit/test_norma.py` and `tests/unit/test_charm.py` both pass
 - [ ] T081 Run quickstart.md validation: verify build commands work, deploy instructions are accurate, and per-story test commands match implemented action names and parameters
-- [ ] T118 [NFR-005] Self-sufficiency audit: verify every Juju K8s charm API surface listed in NFR-005 (lifecycle events, Pebble operations, relations, storage, secrets, actions, status, networking, expose/unexpose, security, observability, subordinates, cross-model relations, model migration, goal-state, model-config, SSH access, K8s constraints) is exercisable through this charm. Cross-reference against Juju CI test charms to confirm no gap.
+- [ ] T118 [NFR-005] Self-sufficiency audit: verify every Juju K8s charm API surface listed in NFR-005 (lifecycle events, Pebble operations, relations, storage, secrets, actions, status, networking, expose/unexpose, security, observability, cross-model relations, model migration, goal-state, model-config, SSH access, K8s constraints) is exercisable through this charm. Cross-reference against Juju CI test charms to confirm no gap.
 
 ---
 
@@ -651,13 +643,10 @@ Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows 
 | US21 (Resource) | US2 (Pebble) | Resource refresh triggers pebble-ready |
 | US22 (Introspect) | US1-US9 | Collectors read data populated by prior stories; goal-state added in Phase 30 |
 | US24 (Multi-Storage) | US10 (Storage) | Extends existing storage handling |
-| US25 (Subordinate) | FR-027 | Requires juju-info provides endpoint |
 | US26 (Publication) | O1 (CI) | Release workflow extends CI pipeline |
 | All stories | US1 (Lifecycle) | Event ledger used for verification |
 
 ### Parallel Opportunities
-
-**Phase 28 (US25)**: T103 must come first (adds endpoint), then T104+T105+T106 can parallelize (overlay, unit tests, integration tests on different files)
 
 **Phase 29 (New FRs)**: All FR tasks are independent of each other — T108-T114 and T129-T134 can run in parallel since they touch different files and test files. T131+T133 must be sequential (charm code before integration test for credential-get).
 
@@ -673,16 +662,14 @@ Phases 1-23 and O2-O3 are **COMPLETE**. The charm has 177 passing unit tests (14
 
 ### Remaining Work
 
-1. **Phase 28 (US25)**: Subordinate — add juju-info endpoint, create overlay, write tests
-2. **Phase 29 (New FRs)**: FR-028 (send_signal), FR-029 (force remove), FR-030 (storage xfail), FR-031 (sudoer overlay), FR-032 (parallel secrets), FR-038 (busybox shell), FR-039 (credential-get), FR-040 (sudoer overlay CI)
+1. **Phase 29 (New FRs)**: FR-028 (send_signal), FR-029 (force remove), FR-030 (storage xfail), FR-031 (sudoer overlay), FR-032 (parallel secrets), FR-038 (busybox shell), FR-039 (credential-get), FR-040 (sudoer overlay CI)
 3. **Phase 30 (Coverage Gaps)**: FR-033 (expose/unexpose), FR-034 (model migration), FR-035 (goal-state), FR-036 (update-status-interval), FR-037 (ssh + constraints)
 4. **Phase O1 update**: CI multi-variant builds (T076, T134)
 5. **Phase 24**: Polish tasks (validation, lint, quickstart check, self-sufficiency audit)
 
 ### Suggested Execution Order
 
-1. T103 (juju-info endpoint) -> T104 (subordinate overlay) -> T105+T106 (tests in parallel)
-2. T108+T110+T111+T112+T114+T129+T131 (new FR implementations — all parallel)
+1. T108+T110+T111+T112+T114+T129+T131 (new FR implementations — all parallel)
 3. T109+T113+T130+T132+T133+T134 (new FR tests/CI — after implementations)
 4. T119+T123+T125 (expose status + goal-state charm code)
 5. T120+T121+T122+T124+T126+T127+T128 (integration tests — all parallel)

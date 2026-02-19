@@ -48,7 +48,6 @@ It is also a **canonical example** of how to build a production-quality Juju K8s
 - **Provides/requires** with matching `calibration` interface for cross-app relations
 - Relation data inspection via `get-relation-data` and `get-peer-data` actions
 - Cross-model relations (CMR) via `juju offer` / `juju consume`
-- **Subordinate** charm support via `juju-info` provides endpoint
 
 ### Scaling
 - Scale from 1 to N units with peer discovery
@@ -230,14 +229,13 @@ JUJU_MODEL=my-model make integration
 | `metrics-endpoint` | provides | `prometheus_scrape` | COS Prometheus metrics |
 | `grafana-dashboard` | provides | `grafana_dashboard` | COS Grafana dashboards |
 | `log-proxy` | requires | `loki_push_api` | COS Loki log forwarding |
-| `juju-info` | provides | `juju-info` | Subordinate charm attachment point |
+| `juju-info` | provides | `juju-info` | Standard Juju info endpoint |
 
 ## Build Variants
 
 | Variant | Config | Purpose |
 |---------|--------|---------|
 | **Principal** (default) | `charmcraft.yaml` | Primary charm with `charm-user: non-root` |
-| **Subordinate** | `charmcraft-subordinate.yaml` | Same source, `subordinate: true`, shares principal's pod |
 | **Sudoer** | `charmcraft-sudoer.yaml` | CI-only variant with `charm-user: sudoer` privilege mode |
 
 ## Reference Documentation

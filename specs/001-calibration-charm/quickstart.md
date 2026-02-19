@@ -171,13 +171,6 @@ juju run juju-norma-k8s/0 introspect sections=config,relations,goal-state
 juju add-storage juju-norma-k8s/0 logs=1
 juju run juju-norma-k8s/0 check-storage name=logs
 
-# US25: Subordinate charm integration
-# Pack the subordinate variant:
-charmcraft pack --project-dir . -c charmcraft-subordinate.yaml
-juju deploy ./juju-norma-k8s-subordinate_ubuntu-24.04-amd64.charm norma-sub
-juju integrate juju-norma-k8s:juju-info norma-sub:juju-info
-juju run juju-norma-k8s/0 introspect sections=relations
-
 # Juju operations on K8s charms:
 # SSH into pod
 juju ssh juju-norma-k8s/0 -- ls /bin/norma

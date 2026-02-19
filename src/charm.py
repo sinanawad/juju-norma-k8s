@@ -91,7 +91,7 @@ class NormaK8sCharm(ops.CharmBase):
         ):
             self.framework.observe(evt, self._on_defer_gate)
 
-        # --- juju-info relation events (subordinate attachment) ---
+        # --- juju-info relation events → _on_defer_gate → _reconcile ---
         for evt in (
             self.on.juju_info_relation_created,
             self.on.juju_info_relation_joined,
@@ -101,9 +101,7 @@ class NormaK8sCharm(ops.CharmBase):
         ):
             self.framework.observe(evt, self._on_defer_gate)
 
-        # --- Pebble / storage events (only when containers are declared) ---
-        # Subordinate variants share the principal's pod and have no containers
-        # or storage in their metadata — skip container/storage event observers.
+        # --- Pebble / storage events ---
         if norma.CONTAINER_NAME in self.meta.containers:
             self.framework.observe(self.on.norma_pebble_ready, self._on_defer_gate)
             self.framework.observe(self.on.norma_pebble_check_failed, self._on_defer_gate)
@@ -262,10 +260,6 @@ class NormaK8sCharm(ops.CharmBase):
 
         version = self._get_charm_version()
 
-        # Subordinate variants have no containers — skip workload operations
-        if norma.CONTAINER_NAME not in self.meta.containers:
-            return
-
         # --- Primary container ---
         container = self.unit.get_container(norma.CONTAINER_NAME)
         if container.can_connect():
@@ -395,11 +389,6 @@ class NormaK8sCharm(ops.CharmBase):
     def _on_collect_unit_status(self, event: ops.CollectStatusEvent) -> None:
         if self._forced_status:
             event.add_status(self._forced_status)
-            return
-
-        # Subordinate variants have no containers — active if not forced
-        if norma.CONTAINER_NAME not in self.meta.containers:
-            event.add_status(ops.ActiveStatus())
             return
 
         container = self.unit.get_container(norma.CONTAINER_NAME)
@@ -601,10 +590,6 @@ class NormaK8sCharm(ops.CharmBase):
         if not storage_cfg:
             event.fail(f"Unknown storage name: {storage_name}")
             return
-        if norma.CONTAINER_NAME not in self.meta.containers:
-            event.fail("Storage not available (subordinate mode)")
-            return
-
         event.log(f"Checking storage '{storage_name}'")
         container = self.unit.get_container(norma.CONTAINER_NAME)
         storage_path = storage_cfg["path"]
@@ -671,9 +656,6 @@ class NormaK8sCharm(ops.CharmBase):
         """Toggle the workload health between healthy and unhealthy."""
         event.log("Toggling workload health")
         container_name = event.params.get("container", norma.CONTAINER_NAME)
-        if container_name not in self.meta.containers:
-            event.fail(f"Container {container_name} not available (subordinate mode)")
-            return
         container = self.unit.get_container(container_name)
 
         if not container.can_connect():
@@ -694,9 +676,6 @@ class NormaK8sCharm(ops.CharmBase):
         """Run the full Pebble file/exec/service operations suite."""
         event.log("Running Pebble operations suite")
         container_name = event.params.get("container", norma.CONTAINER_NAME)
-        if container_name not in self.meta.containers:
-            event.fail(f"Container {container_name} not available (subordinate mode)")
-            return
         container = self.unit.get_container(container_name)
 
         if not container.can_connect():
@@ -822,9 +801,6 @@ class NormaK8sCharm(ops.CharmBase):
     def _on_trigger_notice_action(self, event: ops.ActionEvent) -> None:
         """Send a Pebble custom notice from inside the workload container."""
         event.log("Triggering custom notice")
-        if norma.CONTAINER_NAME not in self.meta.containers:
-            event.fail("Container not available (subordinate mode)")
-            return
         container = self.unit.get_container(norma.CONTAINER_NAME)
 
         if not container.can_connect():
@@ -859,11 +835,6 @@ class NormaK8sCharm(ops.CharmBase):
         charm_version = self._get_charm_version()
 
         workload_version = "unavailable"
-        if norma.CONTAINER_NAME not in self.meta.containers:
-            event.set_results(
-                {"charm-version": charm_version, "workload-version": "n/a (subordinate)"}
-            )
-            return
         container = self.unit.get_container(norma.CONTAINER_NAME)
         if container.can_connect():
             try:
@@ -1114,8 +1085,6 @@ class NormaK8sCharm(ops.CharmBase):
 
     def _collect_storage(self) -> dict:
         """Collect storage status for all declared storages."""
-        if norma.CONTAINER_NAME not in self.meta.containers:
-            return {"status": "n/a", "reason": "subordinate mode"}
         container = self.unit.get_container(norma.CONTAINER_NAME)
         can_connect = container.can_connect()
         result: dict = {}

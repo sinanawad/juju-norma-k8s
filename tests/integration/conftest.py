@@ -51,7 +51,6 @@ def pytest_addoption(parser):
 
 APP = "juju-norma-k8s"
 CHARM_FILE_GLOB = "*norma-k8s_*.charm"
-SUB_CHARM_FILE_GLOB = "*subordinate*.charm"
 OCI_IMAGE_DEFAULT = "localhost:32000/juju-norma:0.1.0"
 RESOURCE_NAME = "juju-norma-image"
 
@@ -132,17 +131,6 @@ def charm_path() -> pathlib.Path:
     charms = sorted(pathlib.Path(".").glob(CHARM_FILE_GLOB))
     assert charms, f"No {CHARM_FILE_GLOB} found; run charmcraft pack"
     return charms[-1]
-
-
-@pytest.fixture(scope="session")
-def subordinate_charm_path() -> pathlib.Path | None:
-    """Locate the subordinate .charm file, or None if not built."""
-    env = _env("CHARM_PATH")
-    search_dir = pathlib.Path(env) if env else pathlib.Path(".")
-    if search_dir.is_dir():
-        charms = sorted(search_dir.glob(SUB_CHARM_FILE_GLOB))
-        return charms[-1] if charms else None
-    return None
 
 
 @pytest.fixture(scope="session")
