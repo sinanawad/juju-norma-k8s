@@ -91,6 +91,16 @@ class NormaK8sCharm(ops.CharmBase):
         ):
             self.framework.observe(evt, self._on_defer_gate)
 
+        # --- juju-info relation events (subordinate attachment) ---
+        for evt in (
+            self.on.juju_info_relation_created,
+            self.on.juju_info_relation_joined,
+            self.on.juju_info_relation_changed,
+            self.on.juju_info_relation_departed,
+            self.on.juju_info_relation_broken,
+        ):
+            self.framework.observe(evt, self._on_defer_gate)
+
         # --- Pebble / storage events (only when containers are declared) ---
         # Subordinate variants share the principal's pod and have no containers
         # or storage in their metadata — skip container/storage event observers.

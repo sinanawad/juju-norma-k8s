@@ -2371,3 +2371,51 @@ class TestSubordinateEndpoint:
         )
         # config-changed while subordinate is integrated should not error
         ctx.run(ctx.on.config_changed(), state)
+
+    def test_juju_info_relation_joined_logged(self):
+        """Verify juju-info relation-joined event is handled and logged."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        juju_info_rel = ops.testing.Relation(
+            endpoint="juju-info",
+            remote_app_name="norma-sub",
+            remote_units_data={0: {}},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[juju_info_rel],
+        )
+        ctx.run(ctx.on.relation_joined(juju_info_rel), state)
+        ledger = norma.read_event_ledger()
+        joined = [
+            e
+            for e in ledger
+            if e["event_name"] == "relation-joined"
+            and e.get("extra", {}).get("remote-app") == "norma-sub"
+        ]
+        assert len(joined) == 1
+
+    def test_juju_info_relation_departed_logs_unit(self):
+        """Verify juju-info relation-departed logs departing unit identity."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        juju_info_rel = ops.testing.Relation(
+            endpoint="juju-info",
+            remote_app_name="norma-sub",
+            remote_units_data={0: {}},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[juju_info_rel],
+        )
+        ctx.run(
+            ctx.on.relation_departed(juju_info_rel, remote_unit=0, departing_unit=0),
+            state,
+        )
+        ledger = norma.read_event_ledger()
+        departed = [
+            e
+            for e in ledger
+            if e["event_name"] == "relation-departed"
+            and e.get("extra", {}).get("remote-app") == "norma-sub"
+        ]
+        assert len(departed) == 1
+        assert departed[0]["extra"]["departing-unit"] == "norma-sub/0"
