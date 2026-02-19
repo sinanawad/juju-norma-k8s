@@ -202,7 +202,7 @@ def charm():
 @pytest.fixture(scope="module")
 def oci_image():
     return os.environ.get(
-        "NORMA_IMAGE", "ghcr.io/myorg/norma:latest"
+        "NORMA_IMAGE", "ghcr.io/myorg/juju-norma:latest"
     )
 ```
 

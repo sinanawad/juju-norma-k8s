@@ -5,7 +5,7 @@
 
 **Tests**: Included per constitution Principle VI (Three-Tier Testing) and SC-007.
 
-**Organization**: Tasks grouped by user story for independent implementation. 25 user stories from spec.md, organized in priority order (P1-P25). 40 functional requirements (FR-001 through FR-040) and 5 non-functional requirements.
+**Organization**: Tasks grouped by user story for independent implementation. 26 user stories from spec.md, organized in priority order (P1-P26). 44 functional requirements (FR-001 through FR-044) and 5 non-functional requirements.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -583,6 +583,40 @@ Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows 
 
 ---
 
+## Phase 31: Public Publication & Release Pipeline (US26)
+
+**Purpose**: Prepare the charm and ROCK for public distribution via CharmHub and ghcr.io with automated release workflows
+
+**Goal**: US26 — automated OCI publishing, CharmHub release, Dependabot, and upstream-source wiring
+
+**Dependencies**: Phase O1 (CI Pipeline) must exist. All user stories should be implemented before cutting a release.
+
+### FR-041: Publish OCI Workflow
+
+- [ ] T135 [US26] Create `.github/workflows/publish-oci.yaml`: trigger on pushes to main (paths: `rockcraft.yaml`, `workload/**`) and version tags (`v*`). Steps: checkout, setup LXD, install rockcraft, `rockcraft pack --platform amd64`, log in to ghcr.io via `docker/login-action`, push image to `ghcr.io/${{ github.repository_owner }}/juju-norma:<version>` and `:latest` using `rockcraft.skopeo` copy. Use `GITHUB_TOKEN` for auth.
+
+### FR-042: Release Workflow
+
+- [ ] T136 [US26] Create `.github/workflows/release.yaml`: trigger on version tags (`v*`). Steps: checkout, setup uv, setup LXD, install charmcraft, `charmcraft fetch-libs`, `charmcraft pack`, upload charm to CharmHub edge via `canonical/charming-actions/upload-charm` (needs `CHARMHUB_TOKEN` secret). Include a separate job triggered on push to main for `canonical/charming-actions/release-libraries`.
+- [ ] T137 [P] [US26] Add library publishing job to `.github/workflows/release.yaml`: on push to main, run `canonical/charming-actions/release-libraries` to auto-publish any charm library changes.
+
+### FR-043: Dependabot Configuration
+
+- [ ] T138 [P] [US26] Create `.github/dependabot.yml`: configure weekly update checks for `github-actions` (directory: `/`) and `pip` (directory: `/`, package-ecosystem covers uv lockfile). Set assignees and labels as appropriate.
+
+### FR-044: Upstream Source in charmcraft.yaml
+
+- [ ] T139 [US26] Add `upstream-source: ghcr.io/sinanawad/juju-norma:0.1.0` to the `juju-norma-image` resource in `charmcraft.yaml`. This allows `juju deploy juju-norma-k8s --channel=edge` to automatically pull the image from ghcr.io without `--resource` override.
+
+### Validation
+
+- [ ] T140 [P] [US26] Add `test_upstream_source_declared` to `tests/unit/test_charm.py`: verify that `charmcraft.yaml` contains `upstream-source` for `juju-norma-image` resource (parse YAML, assert key exists and value starts with `ghcr.io/`).
+- [ ] T141 [P] [US26] Validate all workflow files are syntactically valid YAML and reference correct artifact names. Manual verification: push a test tag to confirm publish-oci and release workflows trigger.
+
+**Checkpoint**: `publish-oci.yaml` and `release.yaml` workflows created, `dependabot.yml` configured, `upstream-source` set in `charmcraft.yaml`. Manual prerequisites documented in spec.md US26.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -596,6 +630,7 @@ Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows 
 - **US25 (Phase 28)**: Depends on FR-027 (juju-info endpoint from T103)
 - **New FRs (Phase 29)**: Depends on corresponding US phases being complete. FR-038 through FR-040 added for replacement target coverage.
 - **Coverage Gaps (Phase 30)**: FR-033 through FR-037, FR-038 through FR-040 — mostly integration tests, can parallelize
+- **Publication (Phase 31)**: US26 — depends on Phase O1 (CI) existing. Should be done after all stories are complete.
 - **CI Pipeline (Phase O1)**: Orthogonal — can start after Setup
 - **Integration Tests (Phase O2)**: Each test group after its story cluster
 - **Integration Infra (Phase O3)**: Orthogonal — can start after Phase 1
@@ -617,6 +652,7 @@ Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows 
 | US22 (Introspect) | US1-US9 | Collectors read data populated by prior stories; goal-state added in Phase 30 |
 | US24 (Multi-Storage) | US10 (Storage) | Extends existing storage handling |
 | US25 (Subordinate) | FR-027 | Requires juju-info provides endpoint |
+| US26 (Publication) | O1 (CI) | Release workflow extends CI pipeline |
 | All stories | US1 (Lifecycle) | Event ledger used for verification |
 
 ### Parallel Opportunities

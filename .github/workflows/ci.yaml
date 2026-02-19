@@ -53,12 +53,18 @@ jobs:
         run: charmcraft pack
       - name: Pack subordinate variant
         run: |
-          # Save principal charm — subordinate pack produces the same filename.
+          # Save principal charm — variant packs produce the same filename.
           mv juju-norma-k8s_*.charm principal.charm
           cp charmcraft.yaml charmcraft-principal.yaml.bak
           cp charmcraft-subordinate.yaml charmcraft.yaml
           charmcraft pack
           mv juju-norma-k8s_*.charm juju-norma-k8s-subordinate_amd64.charm
+          cp charmcraft-principal.yaml.bak charmcraft.yaml
+      - name: Pack sudoer variant
+        run: |
+          cp charmcraft-sudoer.yaml charmcraft.yaml
+          charmcraft pack
+          mv juju-norma-k8s_*.charm juju-norma-k8s-sudoer_amd64.charm
           cp charmcraft-principal.yaml.bak charmcraft.yaml
           rm charmcraft-principal.yaml.bak
           mv principal.charm juju-norma-k8s_amd64.charm
@@ -119,7 +125,7 @@ jobs:
           sudo snap install rockcraft --classic
           rockcraft.skopeo --insecure-policy copy \
             oci-archive:$(ls *.rock) \
-            docker://localhost:32000/norma:0.1.0 \
+            docker://localhost:32000/juju-norma:0.1.0 \
             --dest-tls-verify=false
       - run: make integration
         timeout-minutes: 25

@@ -794,6 +794,14 @@ class NormaK8sCharm(ops.CharmBase):
         _run_op("restart", op_restart)
         _run_op("get-plan", op_get_plan)
 
+        # --- Signal operation (FR-028) ---
+        def op_send_signal():
+            container.send_signal("SIGHUP", service_name)
+            svc = container.get_service(service_name)
+            assert svc.is_running(), "Service should survive SIGHUP"
+
+        _run_op("send-signal", op_send_signal)
+
         # Cleanup test dir
         with contextlib.suppress(ops.pebble.PathError):
             container.remove_path(f"{base_dir}/pebble-test-dir", recursive=True)
@@ -932,12 +940,41 @@ class NormaK8sCharm(ops.CharmBase):
 
         results["trust-available"] = "false"
         results["cloud-type"] = ""
+        results["credential-endpoint"] = ""
+        results["credential-auth-type"] = ""
+        results["k8s-api-reachable"] = "false"
+        cloud_spec = None
         try:
             cloud_spec = self.model.get_cloud_spec()
             results["trust-available"] = "true"
             results["cloud-type"] = cloud_spec.type if cloud_spec else ""
         except ops.ModelError:
             pass
+
+        # FR-039: Exercise credential-get hook tool — hit K8s API
+        if cloud_spec and cloud_spec.credential:
+            results["credential-endpoint"] = cloud_spec.endpoint or ""
+            results["credential-auth-type"] = cloud_spec.credential.auth_type or ""
+            token = cloud_spec.credential.attributes.get(
+                "Token", cloud_spec.credential.attributes.get("token", "")
+            )
+            if token and cloud_spec.endpoint:
+                try:
+                    import ssl
+                    import urllib.error
+                    import urllib.request
+
+                    ssl_ctx = ssl.create_default_context()
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE
+                    req = urllib.request.Request(
+                        f"{cloud_spec.endpoint}/api/v1/namespaces",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    with urllib.request.urlopen(req, context=ssl_ctx, timeout=5) as resp:
+                        results["k8s-api-reachable"] = str(resp.status == 200).lower()
+                except (urllib.error.URLError, ssl.SSLError, TimeoutError, OSError):
+                    results["k8s-api-reachable"] = "false"
 
         event.set_results(results)
 

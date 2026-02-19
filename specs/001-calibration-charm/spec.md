@@ -698,6 +698,54 @@ verify cleanup.
 
 ---
 
+### User Story 26 - Public Publication & Release Pipeline (Priority: P26)
+
+**Goal**: Prepare the charm and ROCK for public distribution via CharmHub and GitHub Container Registry (ghcr.io), with automated release workflows.
+
+**Why this priority**: Publication is the final step — all features must be implemented and tested before shipping. This story establishes the supply chain: ROCK images go to ghcr.io, charm artifacts go to CharmHub, and release workflows automate the process on merge to main.
+
+**Independent Test**: Push a tag (e.g., `v0.1.0`) to the repository. Verify that CI builds the ROCK, pushes it to `ghcr.io/sinanawad/juju-norma:0.1.0`, builds the charm with the public `upstream-source`, and uploads it to CharmHub edge channel. Then `juju deploy juju-norma-k8s --channel=edge` from a clean model and verify the charm reaches active.
+
+**Acceptance Scenarios**:
+
+1. **Given** the ROCK is built in CI, **When** the `publish-oci.yaml` workflow runs, **Then** the image is pushed to `ghcr.io/sinanawad/juju-norma:<version>` and is publicly pullable.
+2. **Given** the OCI image is published, **When** a tag matching `v*` is pushed, **Then** the `release.yaml` workflow packs the charm with the public `upstream-source`, runs the full test suite, and uploads to CharmHub edge channel via `canonical/charming-actions/upload-charm`.
+3. **Given** the charm is published to CharmHub edge, **When** a user runs `juju deploy juju-norma-k8s --channel=edge`, **Then** the charm deploys, pulls the OCI image from ghcr.io, and reaches active status.
+4. **Given** a new commit is merged to main, **When** the release workflow runs, **Then** charm libraries are published via `canonical/charming-actions/release-libraries`.
+5. **Given** the repository has Dependabot configured, **When** a weekly check runs, **Then** PRs are created for outdated GitHub Actions versions and uv dependencies.
+
+**Manual Prerequisites** (must be done by the repository owner before the workflows can run):
+
+1. **Register charm name on CharmHub**:
+   ```bash
+   charmcraft register juju-norma-k8s
+   ```
+
+2. **Generate CharmHub credentials**:
+   ```bash
+   charmcraft login --export=charmhub-token.txt
+   ```
+   Copy the token content for the next step.
+
+3. **Add GitHub repository secrets** (Settings → Secrets and variables → Actions):
+   - `CHARMHUB_TOKEN`: Paste the content of `charmhub-token.txt`
+
+4. **Enable GitHub Container Registry**:
+   - Go to github.com → Settings → Packages → ensure "Public" visibility for the `juju-norma` package
+   - The `GITHUB_TOKEN` automatically has `packages:write` permission — no extra secret needed
+
+5. **Verify ghcr.io access** (after first push):
+   ```bash
+   docker pull ghcr.io/sinanawad/juju-norma:0.1.0
+   ```
+
+6. **CharmHub channel promotion** (manual, after edge validation):
+   ```bash
+   charmcraft release juju-norma-k8s --revision=<N> --channel=stable
+   ```
+
+---
+
 ### Edge Cases
 
 - What happens when `pebble-ready` fires but the container loses connectivity before the layer is applied? *(Covered by US2: `_reconcile()` wraps Pebble ops in `try/except ConnectionError`; next pebble-ready retries.)*
@@ -759,6 +807,10 @@ verify cleanup.
 - **FR-038**: The ROCK image MUST include a minimal POSIX shell (`/bin/sh` via busybox) to support `juju exec` and `juju ssh` operations that require shell interpretation inside the workload container. This enables the charm to replace alertmanager-k8s and snappass-test in the secrets_k8s suite where `juju exec --unit ... secret-add` is used.
 - **FR-039**: The `check-security` action MUST exercise the `credential-get` hook tool to retrieve K8s cloud credentials, hits the K8s API using those credentials, and reports the result. This enables replacement of juju-qa-credential-get-k8s in the sidecar suite. The action MUST require `--trust` at deploy time and fail gracefully without it.
 - **FR-040**: The sudoer build variant MUST be packaged as a charmcraft overlay (`charmcraft-sudoer.yaml`) following the same pattern as the subordinate overlay (`charmcraft-subordinate.yaml`), producing a third `.charm` artifact from the same source tree. CI packs all three variants (principal, subordinate, sudoer) in the pack step.
+- **FR-041**: A `publish-oci.yaml` GitHub Actions workflow MUST build the ROCK image and push it to `ghcr.io/<owner>/juju-norma:<version>` with public visibility. The workflow MUST trigger on pushes to main that modify `rockcraft.yaml` or `workload/` files, and on version tags (`v*`). The image MUST be pushed with both the version tag and `latest`.
+- **FR-042**: A `release.yaml` GitHub Actions workflow MUST pack the charm with the public OCI `upstream-source` pointing to ghcr.io, run the full test suite, and upload the charm to CharmHub edge channel via `canonical/charming-actions/upload-charm`. The workflow MUST trigger on version tags (`v*`). Library publishing via `canonical/charming-actions/release-libraries` MUST run on pushes to main.
+- **FR-043**: A `dependabot.yml` configuration MUST be present to create weekly PRs for outdated GitHub Actions versions and uv dependency updates.
+- **FR-044**: The `charmcraft.yaml` MUST declare `upstream-source` in the `juju-norma-image` resource pointing to the public ghcr.io image URI, so that `juju deploy juju-norma-k8s --channel=edge` pulls the image automatically without `--resource` override.
 
 ### Non-Functional Requirements
 

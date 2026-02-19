@@ -21,8 +21,8 @@ cd ..
 rockcraft pack
 # Upload to local registry
 rockcraft.skopeo --insecure-policy copy \
-    oci-archive:norma_0.1.0_amd64.rock \
-    docker://localhost:32000/norma:0.1.0 \
+    oci-archive:juju-norma_0.1.0_amd64.rock \
+    docker://localhost:32000/juju-norma:0.1.0 \
     --dest-tls-verify=false
 ```
 
@@ -50,7 +50,7 @@ charmcraft pack
 ```bash
 # Deploy with the OCI resource
 juju deploy ./juju-norma-k8s_ubuntu-24.04-amd64.charm \
-    --resource juju-norma-image=localhost:32000/norma:0.1.0 \
+    --resource juju-norma-image=localhost:32000/juju-norma:0.1.0 \
     --trust
 
 # Watch status
@@ -105,7 +105,7 @@ juju run juju-norma-k8s/0 get-peer-data
 
 # US7: Provides/requires relations (two-instance pattern)
 juju deploy ./juju-norma-k8s_ubuntu-24.04-amd64.charm norma-peer \
-    --resource juju-norma-image=localhost:32000/norma:0.1.0
+    --resource juju-norma-image=localhost:32000/juju-norma:0.1.0
 juju integrate juju-norma-k8s:calibration-provider norma-peer:calibration-requirer
 juju run juju-norma-k8s/0 get-relation-data endpoint=calibration-provider
 
@@ -160,7 +160,7 @@ juju config juju-norma-k8s calibration-string="trigger-defer"
 juju run juju-norma-k8s/0 get-event-log event-filter=defer
 
 # US21: OCI Resource Lifecycle
-juju attach-resource juju-norma-k8s juju-norma-image=localhost:32000/norma:v2
+juju attach-resource juju-norma-k8s juju-norma-image=localhost:32000/juju-norma:v2
 juju run juju-norma-k8s/0 get-version
 
 # US22: Introspection (includes goal-state)
@@ -189,7 +189,7 @@ juju run juju-norma-k8s/0 get-event-log event-filter=update-status
 
 # Deploy with constraints
 juju deploy ./juju-norma-k8s_ubuntu-24.04-amd64.charm norma-constrained \
-    --resource juju-norma-image=localhost:32000/norma:0.1.0 \
+    --resource juju-norma-image=localhost:32000/juju-norma:0.1.0 \
     --constraints "mem=512M cores=1"
 
 # Model migration (requires second controller)

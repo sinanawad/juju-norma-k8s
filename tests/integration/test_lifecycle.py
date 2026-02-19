@@ -3,6 +3,7 @@
 import json
 
 import jubilant
+import pytest
 
 APP = "juju-norma-k8s"
 
@@ -56,3 +57,46 @@ class TestPebbleWorkload:
         task = juju.run(f"{APP}/leader", "get-event-log", params={"event-filter": "pebble-ready"})
         events = json.loads(task.results["events"])
         assert len(events) >= 1, "pebble-ready should appear in event ledger"
+
+
+class TestForceRemove:
+    """FR-029: Force remove application cleans up model."""
+
+    @pytest.fixture(autouse=True)
+    def _require_destructive(self, request):
+        if not request.config.getoption("--run-destructive"):
+            pytest.skip("Destructive test — pass --run-destructive to run")
+
+    def test_force_remove_application(self, juju: jubilant.Juju, charm_path, oci_image):
+        """Force-removing the app returns the model to a clean state.
+
+        This test deploys a second instance, force-removes it, and verifies
+        the model is clean. It does NOT touch the main test deployment.
+        """
+        alt_app = "norma-force-test"
+        juju.deploy(
+            str(charm_path),
+            app=alt_app,
+            resources={"juju-norma-image": oci_image},
+        )
+        juju.wait(lambda s: alt_app in s.apps and s.apps[alt_app].is_active, timeout=300)
+
+        juju.cli("remove-application", alt_app, "--force", "--no-wait", "--no-prompt")
+        juju.wait(lambda s: alt_app not in s.apps, timeout=120)
+
+
+class TestJujuExecShell:
+    """FR-038: Busybox shell in ROCK enables juju exec with shell."""
+
+    def test_juju_exec_shell(self, juju: jubilant.Juju):
+        """juju exec runs /bin/sh -c inside the workload container."""
+        result = juju.cli(
+            "exec",
+            "--unit",
+            f"{APP}/leader",
+            "--",
+            "/bin/sh",
+            "-c",
+            "echo hello-norma",
+        )
+        assert "hello-norma" in result

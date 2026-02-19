@@ -206,7 +206,7 @@ Note: The `juju-info` provides endpoint does NOT specify `scope: container` — 
 
 | Resource | Current Name | Type | Registry |
 |----------|-------------|------|----------|
-| Workload image | `juju-norma-image` | oci-image | `localhost:32000/norma:0.1.0` (dev), `ghcr.io/canonical/norma:latest` (prod) |
+| Workload image | `juju-norma-image` | oci-image | `localhost:32000/juju-norma:0.1.0` (dev), `ghcr.io/canonical/juju-norma:latest` (prod) |
 
 ### Actions (18 + introspect)
 
@@ -269,6 +269,7 @@ Note: The `juju-info` provides endpoint does NOT specify `scope: container` — 
 | US22 (Introspect) | US1-US9 | Collectors read data populated by prior stories |
 | US24 (Multi-Storage) | US10 (Storage) | Extends existing storage handling |
 | US25 (Subordinate) | FR-027 | Requires juju-info provides endpoint |
+| US26 (Publication) | O1 (CI) | Release workflow extends CI pipeline |
 | All stories | US1 (Lifecycle) | Event ledger used for verification |
 
 ### New Requirements Mapping (Post-Analysis)
@@ -291,4 +292,8 @@ These requirements were added after the original planning and need task coverage
 | FR-038 | US23 | ROCK includes busybox shell (`/bin/sh`) for `juju exec`/`juju ssh` shell support |
 | FR-039 | US17 | `credential-get` hook tool exercise in check-security action |
 | FR-040 | US17 | Sudoer charmcraft overlay (`charmcraft-sudoer.yaml`) packed as third build variant |
+| FR-041 | US26 | Publish OCI workflow — build ROCK and push to ghcr.io |
+| FR-042 | US26 | Release workflow — pack charm, upload to CharmHub edge, publish libraries |
+| FR-043 | US26 | Dependabot configuration for GitHub Actions and uv dependencies |
+| FR-044 | US26 | `upstream-source` in charmcraft.yaml pointing to ghcr.io image |
 | NFR-005 | All | Self-sufficiency meta-requirement (audit task in Polish phase) |

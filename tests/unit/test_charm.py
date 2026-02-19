@@ -1439,6 +1439,17 @@ class TestPebbleOps:
         assert len(parts) == 2
         assert parts[1].endswith(" passed")
 
+    def test_pebble_ops_send_signal(self):
+        """FR-028: send-signal operation sends SIGHUP without killing service."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = self._norma_with_exec()
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("test-pebble-ops"), state)
+        assert "send-signal" in ctx.action_results
+        assert ctx.action_results["send-signal"] == "pass"
+
 
 class TestNotices:
     """US13: Pebble Custom Notices — trigger-notice action and event handling."""
@@ -1919,6 +1930,17 @@ class TestSecurity:
         )
         ctx.run(ctx.on.action("check-security"), state)
         assert ctx.action_results["trust-available"] == "false"
+
+    def test_check_security_credential_keys_without_trust(self):
+        """FR-039: credential keys present but empty when trust not granted."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("check-security"), state)
+        assert ctx.action_results["credential-endpoint"] == ""
+        assert ctx.action_results["credential-auth-type"] == ""
+        assert ctx.action_results["k8s-api-reachable"] == "false"
 
     def test_check_security_workload_disconnected(self):
         """check-security reports unavailable when Pebble disconnected."""

@@ -1,11 +1,12 @@
 type: charm
 name: juju-norma-k8s
-title: Norma Calibration
-summary: Juju K8s calibration charm exercising all charm features
+title: Norma Calibration (Sudoer)
+summary: Sudoer variant of the Juju K8s calibration charm
 description: |
-  A comprehensive calibration charm for Juju CI that exercises all features
-  and capabilities relevant to Kubernetes charms. Each feature is testable
-  independently via dedicated actions.
+  Sudoer variant of the norma-k8s calibration charm, built from the same
+  source with a different charmcraft overlay. Uses charm-user: sudoer instead
+  of non-root to validate Juju's sudoer privilege mode for K8s charms.
+  Used by CI to test all privilege levels.
 
 base: ubuntu@24.04
 platforms:
@@ -222,7 +223,7 @@ charm-libs:
   - lib: loki-k8s.loki_push_api
     version: "1"
 
-charm-user: non-root
+charm-user: sudoer
 
 links:
   source:

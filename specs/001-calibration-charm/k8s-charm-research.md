@@ -608,7 +608,7 @@ The calibration charm already supports these Juju primitives:
 
 | Current | Replacement | Notes |
 |---------|-------------|-------|
-| juju-qa-container-resource + 2 local images | norma-k8s + ROCK variants | Deploy with `--resource juju-norma-image=localhost:32000/norma:0.1.0` |
+| juju-qa-container-resource + 2 local images | norma-k8s + ROCK variants | Deploy with `--resource juju-norma-image=localhost:32000/juju-norma:0.1.0` |
 | `attach-resource app-image=resource-2` | `attach-resource juju-norma-image=...` | Same attach semantics |
 | Verify workload status message changes | Verify via `get-version` action (workload version from OCI env) | norma's VERSION env var in Pebble layer tracks the image |
 | `juju refresh --resource app-image=3` | `juju refresh --resource juju-norma-image=<rev>` | Requires norma-k8s published to CharmHub for rev-based refresh |

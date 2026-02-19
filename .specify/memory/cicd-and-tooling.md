@@ -40,7 +40,7 @@ containers:
 resources:
   norma-image:
     type: oci-image
-    upstream-source: ghcr.io/myorg/norma:latest
+    upstream-source: ghcr.io/myorg/juju-norma:latest
     description: OCI image for the Norma application
 
 storage:
@@ -285,7 +285,7 @@ CHARM_PATH=./norma-k8s_ubuntu-24.04-amd64.charm make integration
 
 # 5. Deploy
 juju deploy ./norma-k8s_ubuntu-24.04-amd64.charm \
-    --resource norma-image=ghcr.io/myorg/norma:latest
+    --resource norma-image=ghcr.io/myorg/juju-norma:latest
 
 # 6. Monitor
 juju status --watch 2s

@@ -47,7 +47,7 @@ containers:
 resources:
   juju-norma-image:
     type: oci-image
-    upstream-source: ghcr.io/canonical/norma:latest
+    upstream-source: ghcr.io/canonical/juju-norma:latest
     description: Chiselled ROCK with Go calibration binary
 
 storage:

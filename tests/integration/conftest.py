@@ -21,7 +21,7 @@ Environment variables:
     JUJU_MODEL          Reuse an existing model (skip deploy).
     JUJU_CONTROLLER     Controller name (default: "microk8s-localhost").
     CHARM_PATH          Path to .charm file or directory containing one.
-    NORMA_IMAGE         OCI image URI (default: "localhost:32000/norma:0.1.0").
+    NORMA_IMAGE         OCI image URI (default: "localhost:32000/juju-norma:0.1.0").
     KEEP_MODEL          Set to "1" to keep the model after tests (debugging).
 """
 
@@ -38,10 +38,21 @@ from .setup_env import SetupError, check_prerequisites, ensure_environment
 
 logger = logging.getLogger(__name__)
 
+
+def pytest_addoption(parser):
+    """Register custom CLI flags for integration tests."""
+    parser.addoption(
+        "--run-destructive",
+        action="store_true",
+        default=False,
+        help="Run destructive tests (e.g., force-remove application)",
+    )
+
+
 APP = "juju-norma-k8s"
 CHARM_FILE_GLOB = "*norma-k8s_*.charm"
 SUB_CHARM_FILE_GLOB = "*subordinate*.charm"
-OCI_IMAGE_DEFAULT = "localhost:32000/norma:0.1.0"
+OCI_IMAGE_DEFAULT = "localhost:32000/juju-norma:0.1.0"
 RESOURCE_NAME = "juju-norma-image"
 
 

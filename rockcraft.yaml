@@ -1,4 +1,4 @@
-name: norma
+name: juju-norma
 base: bare
 build-base: ubuntu@24.04
 version: "0.1.0"
@@ -22,6 +22,17 @@ services:
     startup: enabled
 
 parts:
+  busybox:
+    plugin: nil
+    stage-packages:
+      - busybox-static_bins
+    override-prime: |
+      craftctl default
+      # Create /bin/sh symlink for juju exec/ssh shell support (FR-038)
+      if [ ! -e "${CRAFT_PRIME}/bin/sh" ]; then
+        ln -s busybox "${CRAFT_PRIME}/bin/sh"
+      fi
+
   tmp-dir:
     plugin: nil
     override-build: |

@@ -134,8 +134,8 @@ charmcraft.yaml    Charm metadata, actions, config, relations, storage
 rockcraft pack
 # Upload to local registry
 rockcraft.skopeo --insecure-policy copy \
-    oci-archive:norma_0.1.0_amd64.rock \
-    docker://localhost:32000/norma:0.1.0 \
+    oci-archive:juju-norma_0.1.0_amd64.rock \
+    docker://localhost:32000/juju-norma:0.1.0 \
     --dest-tls-verify=false
 ```
 
@@ -147,7 +147,7 @@ charmcraft fetch-libs
 charmcraft pack
 
 juju deploy ./juju-norma-k8s_ubuntu-24.04-amd64.charm \
-    --resource juju-norma-image=localhost:32000/norma:0.1.0 \
+    --resource juju-norma-image=localhost:32000/juju-norma:0.1.0 \
     --trust
 
 juju status --watch 2s
