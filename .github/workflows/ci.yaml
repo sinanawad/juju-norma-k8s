@@ -133,3 +133,44 @@ jobs:
           SETUP_ENVIRONMENT: "1"
           JUJU_CHANNEL: ${{ matrix.juju-channel }}
           CHARM_PATH: ${{ github.workspace }}
+
+  subordinate:
+    name: K8s Subordinate (3.6/stable)
+    runs-on: ubuntu-24.04
+    needs: [pack, build-rock]
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: charm
+      - uses: actions/download-artifact@v4
+        with:
+          name: rock
+      - run: uv sync --extra dev
+      - name: Setup microk8s
+        run: |
+          sudo snap install microk8s --channel=1.34-strict/stable
+          sudo usermod -a -G snap_microk8s $USER
+          sudo microk8s status --wait-ready
+          sudo microk8s enable dns hostpath-storage registry
+      - name: Push ROCK to local registry
+        run: |
+          sudo snap install rockcraft --classic
+          rockcraft.skopeo --insecure-policy copy \
+            oci-archive:$(ls *.rock) \
+            docker://localhost:32000/juju-norma:0.1.0 \
+            --dest-tls-verify=false
+      - name: Run subordinate tests
+        timeout-minutes: 10
+        run: >
+          uv run pytest tests/integration/test_subordinate.py
+          -v -s --tb=short --log-cli-level=INFO
+        env:
+          SETUP_ENVIRONMENT: "1"
+          JUJU_CHANNEL: "3.6/stable"
+          CHARM_PATH: ${{ github.workspace }}
