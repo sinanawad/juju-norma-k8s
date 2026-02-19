@@ -28,6 +28,7 @@ Environment variables:
 import logging
 import os
 import pathlib
+import subprocess
 import uuid
 
 import jubilant
@@ -39,8 +40,35 @@ logger = logging.getLogger(__name__)
 
 APP = "juju-norma-k8s"
 CHARM_FILE_GLOB = "*norma-k8s_*.charm"
+SUB_CHARM_FILE_GLOB = "*subordinate*.charm"
 OCI_IMAGE_DEFAULT = "localhost:32000/norma:0.1.0"
 RESOURCE_NAME = "juju-norma-image"
+
+
+def _detect_juju_major_version() -> int:
+    """Detect the Juju major version at collection time.
+
+    Checks JUJU_CHANNEL env var first, then runs ``juju version``.
+    Used for conditional xfail markers on Juju 4 WIP limitations.
+    """
+    channel = os.environ.get("JUJU_CHANNEL", "")
+    if channel:
+        try:
+            return int(channel.split(".")[0].split("/")[0])
+        except ValueError:
+            pass
+    cli = os.environ.get("JUJU_CLI", "juju")
+    try:
+        result = subprocess.run([cli, "version"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return int(result.stdout.strip().split(".")[0])
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+    return 0
+
+
+JUJU_MAJOR = _detect_juju_major_version()
+JUJU_4 = JUJU_MAJOR >= 4
 
 
 def _env(name: str, default: str = "") -> str:
@@ -93,6 +121,17 @@ def charm_path() -> pathlib.Path:
     charms = sorted(pathlib.Path(".").glob(CHARM_FILE_GLOB))
     assert charms, f"No {CHARM_FILE_GLOB} found; run charmcraft pack"
     return charms[-1]
+
+
+@pytest.fixture(scope="session")
+def subordinate_charm_path() -> pathlib.Path | None:
+    """Locate the subordinate .charm file, or None if not built."""
+    env = _env("CHARM_PATH")
+    search_dir = pathlib.Path(env) if env else pathlib.Path(".")
+    if search_dir.is_dir():
+        charms = sorted(search_dir.glob(SUB_CHARM_FILE_GLOB))
+        return charms[-1] if charms else None
+    return None
 
 
 @pytest.fixture(scope="session")

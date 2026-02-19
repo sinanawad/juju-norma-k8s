@@ -2280,3 +2280,72 @@ class TestIntrospectAction:
         assert leadership["is-leader"] is False
         secrets = json.loads(results["secrets"])
         assert secrets["has-secret"] is False
+
+
+class TestSubordinateEndpoint:
+    """Verify juju-info provides endpoint for subordinate attachment (US25).
+
+    Note: On the principal side, juju-info is a regular provides endpoint.
+    SubordinateRelation is only used on the requires side (scope: container).
+    """
+
+    def test_active_without_subordinate(self):
+        """AC5: Charm reaches active status without any subordinate integrated."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        out = ctx.run(ctx.on.collect_unit_status(), state)
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_active_with_juju_info_relation(self):
+        """Charm stays active when a subordinate is integrated via juju-info."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        juju_info_rel = ops.testing.Relation(
+            endpoint="juju-info",
+            remote_app_name="norma-sub",
+            remote_units_data={0: {"subordinate-key": "value"}},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[juju_info_rel],
+        )
+        out = ctx.run(ctx.on.collect_unit_status(), state)
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_juju_info_relation_visible_in_introspect(self):
+        """AC3: Introspect shows the subordinate relation in the relations section."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        juju_info_rel = ops.testing.Relation(
+            endpoint="juju-info",
+            remote_app_name="norma-sub",
+            remote_units_data={0: {"subordinate-key": "value"}},
+        )
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(endpoint="norma-peers", peers_data={}),
+                juju_info_rel,
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "relations"}), state)
+        results = ctx.action_results
+        relations = json.loads(results["relations"])
+        assert "juju-info" in relations
+        assert len(relations["juju-info"]) >= 1
+
+    def test_reconcile_with_juju_info_relation(self):
+        """Reconciler handles juju-info relation events without error."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        juju_info_rel = ops.testing.Relation(
+            endpoint="juju-info",
+            remote_app_name="norma-sub",
+            remote_units_data={0: {}},
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[juju_info_rel],
+        )
+        # config-changed while subordinate is integrated should not error
+        ctx.run(ctx.on.config_changed(), state)

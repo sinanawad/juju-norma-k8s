@@ -1,11 +1,14 @@
 type: charm
 name: juju-norma-k8s
-title: Norma Calibration
-summary: Juju K8s calibration charm exercising all charm features
+title: Norma Calibration (Subordinate)
+summary: Subordinate variant of the Juju K8s calibration charm
 description: |
-  A comprehensive calibration charm for Juju CI that exercises all features
-  and capabilities relevant to Kubernetes charms. Each feature is testable
-  independently via dedicated actions.
+  Subordinate variant of the norma-k8s calibration charm, built from the same
+  source with a different charmcraft overlay. Attaches to a principal charm via
+  the juju-info interface with scope: container, sharing the principal's pod.
+  Used by CI to test subordinate relation mechanics.
+
+subordinate: true
 
 base: ubuntu@24.04
 platforms:
@@ -26,35 +29,8 @@ assumes:
   - juju >= 3.6
   - k8s-api
 
-containers:
-  norma:
-    resource: juju-norma-image
-    uid: 584792
-    gid: 584792
-    mounts:
-      - storage: data
-        location: /var/lib/norma
-      - storage: logs
-        location: /var/log/norma
-  norma-secondary:
-    resource: juju-norma-image
-    uid: 584792
-    gid: 584792
-
-resources:
-  juju-norma-image:
-    type: oci-image
-    upstream-source: localhost:32000/norma:0.1.0
-    description: Chiselled ROCK with Go calibration binary
-
-storage:
-  data:
-    type: filesystem
-    minimum-size: 1G
-  logs:
-    type: filesystem
-    minimum-size: 512M
-    multiple-range: 0-1
+# Subordinates do NOT declare containers, resources, or storage.
+# They share the principal's pod.
 
 config:
   options:
@@ -200,11 +176,11 @@ provides:
   grafana-dashboard:
     interface: grafana_dashboard
     optional: true
-  juju-info:
-    interface: juju-info
-    optional: true
 
 requires:
+  juju-info:
+    interface: juju-info
+    scope: container
   calibration-requirer:
     interface: calibration
     optional: true

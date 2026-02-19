@@ -231,6 +231,20 @@ juju deploy ./my-charm.charm my-app-peer --resource ...
 juju integrate my-app:provider my-app-peer:requirer
 ```
 
+### K8s subordinates crash on Juju 4 (WIP)
+
+**Symptom**: Integrating a subordinate charm on a K8s model causes the principal's agent to enter a crash loop:
+```
+ERROR juju.worker.uniter resolver loop error: getting principal unit machine
+information: unit "..." is not assigned to a machine in the model
+```
+
+**Cause**: Juju 4's subordinate unit placement code assumes machine-based models. On K8s models (which have no machines), the lookup fails and the principal's uniter restarts repeatedly. The subordinate unit is never created.
+
+**Status**: Juju 4 WIP limitation. Works on Juju 3.6. Integration tests use `xfail(strict=False)` so they auto-detect when the fix lands.
+
+**Workaround**: Test subordinate integration on Juju 3.6 only. On Juju 4, the `juju-info` provides endpoint is declared and unit-tested, but live subordinate deployment is deferred.
+
 ### Broken relation — don't re-grant secrets
 
 **Symptom**: Secret grant error during `relation-broken` event.
@@ -355,3 +369,20 @@ rockcraft.skopeo --insecure-policy copy \
     docker://localhost:32000/my-image:tag \
     --dest-tls-verify=false
 ```
+
+---
+
+## Juju 4 Known Limitations (WIP)
+
+These are Juju 4.x features that are not yet implemented or have bugs on K8s models. Integration tests use `xfail(strict=False)` so they auto-detect when fixes land. All work correctly on Juju 3.6.
+
+| Feature | Error / Symptom | Juju 3.6 | Juju 4.x |
+|---------|-----------------|----------|----------|
+| **K8s subordinates** | `getting principal unit machine information: unit "..." is not assigned to a machine` — placement assumes machine models | Works | Broken |
+| **`juju storage` / `juju list-storage`** | `not yet available in 4.0.2` | Works | Not implemented |
+| **`juju add-storage` / `juju detach-storage`** | `not supported on container models` | Works | Not supported |
+| **Pebble custom notices dispatch** | Notices exist in Pebble but the Juju agent never dispatches `pebble-custom-notice` events to the charm | Works | Not dispatched |
+| **OCI deploy race** (`juju/juju#21456`) | Unit starts before OCI resource is attached; pod shows image pull error | Works | Fixed in 4.0.2+ (patched build required) |
+| **Self-relations** | `juju integrate my-app:provider my-app:requirer` fails for same-app provides/requires | Works | Not supported |
+
+**CI strategy**: The CI matrix runs integration tests on Juju 3.6 (primary) where all features work. When Juju 4 is added to the matrix, affected tests are `xfail(strict=False)` — they run, report expected failure, and automatically flip to `xpass` when Juju fixes the issue. This provides zero-maintenance regression detection.

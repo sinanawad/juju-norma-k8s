@@ -49,8 +49,17 @@ jobs:
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
       - run: charmcraft fetch-libs
-      - run: charmcraft pack
-      - name: Upload charm artifact
+      - name: Pack principal charm
+        run: charmcraft pack
+      - name: Pack subordinate variant
+        run: |
+          cp charmcraft.yaml charmcraft-principal.yaml.bak
+          cp charmcraft-subordinate.yaml charmcraft.yaml
+          charmcraft pack
+          mv juju-norma-k8s_*.charm juju-norma-k8s-subordinate_amd64.charm
+          cp charmcraft-principal.yaml.bak charmcraft.yaml
+          rm charmcraft-principal.yaml.bak
+      - name: Upload charm artifacts
         uses: actions/upload-artifact@v4
         with:
           name: charm
