@@ -59,7 +59,6 @@ Runtime view of the deployment, assembled by `_reconcile()` and reported by acti
 | command | `/bin/norma` |
 | environment.PORT | From `calibration-int` config (default `8080`) |
 | environment.VERSION | Charm version string |
-| user | `_daemon_` |
 | checks.health | HTTP `http://localhost:8080/health`, level `ready`, period 10s, threshold 3 |
 | checks.alive | exec `["/bin/norma", "--check"]`, level `alive`, period 30s |
 | checks.tcp-alive | TCP port 8080, level `alive`, period 30s |
@@ -199,6 +198,7 @@ The `introspect` action returns a flat key-value map where each key is a section
 | `storage` | JSON string | Yes | Storage attachment status |
 | `containers` | JSON string | Yes | Container connectivity and services |
 | `secrets` | JSON string | Yes | Secret metadata (no values) |
+| `goal-state` | JSON string | Yes | Planned model state from `goal-state` hook tool (units and relations with status) |
 
 ### Section Schemas
 

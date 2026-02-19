@@ -5,7 +5,7 @@
 
 **Tests**: Included per constitution Principle VI (Three-Tier Testing) and SC-007.
 
-**Organization**: Tasks grouped by user story for independent implementation. 25 user stories from spec.md, organized in priority order (P1-P25).
+**Organization**: Tasks grouped by user story for independent implementation. 25 user stories from spec.md, organized in priority order (P1-P25). 40 functional requirements (FR-001 through FR-040) and 5 non-functional requirements.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -471,7 +471,24 @@
 
 - [ ] T114 [US9] Add `test_parallel_secrets` to `tests/integration/test_secrets.py`: create 3 user secrets, grant all to app, set each as config (or use separate secret relation data), verify charm tracks all secret IDs independently and can retrieve each secret's content. Verifies no cross-contamination between parallel secret grants.
 
-**Checkpoint**: All 6 new FRs have implementation and test coverage
+### FR-038: Busybox Shell in ROCK (extends US23)
+
+- [ ] T129 [US23] Add busybox shell slice to `rockcraft.yaml`: add a `busybox` part using the `nil` plugin that stages `/bin/sh` and `/bin/busybox` from the `busybox-static_bins` slice in `build-base: ubuntu@24.04`. This provides a minimal POSIX shell for `juju exec`/`juju ssh` operations inside the workload container (replaces alertmanager-k8s and snappass-test in secrets_k8s suite). Verify `base: bare` still works with the added slice.
+- [ ] T130 [P] [US23] Add unit test or build validation for busybox in ROCK: verify that the rockcraft.yaml includes the busybox part and stages `/bin/sh`. Update `tests/integration/test_lifecycle.py` to include a `test_juju_exec_shell` test that runs `juju exec --unit juju-norma-k8s/0 -- /bin/sh -c 'echo hello'` and verifies the output.
+
+### FR-039: Credential-Get Action (extends US17)
+
+- [ ] T131 [US17] Extend `_on_check_security_action` in `src/charm.py` to exercise the `credential-get` hook tool: call `self.model._backend._run_tool("credential-get")` (or use `subprocess` to invoke the `credential-get` hook tool), parse the JSON output containing cloud type, endpoint, and credential attributes, hit the K8s API using the returned token/endpoint to verify connectivity (e.g., `GET /api/v1/namespaces`), and include the result in action output keys `credential-cloud-type`, `credential-endpoint`, `k8s-api-reachable`. Wrap in try/except for graceful degradation when `--trust` is not set — return `credential-available: false` with a descriptive message.
+- [ ] T132 [P] [US17] Add unit tests for credential-get functionality in `tests/unit/test_charm.py`: verify check-security action includes credential keys when trust is available, verify graceful failure message when trust is not available.
+- [ ] T133 [US17] Add `test_credential_get` integration test to `tests/integration/test_security.py`: deploy charm with `--trust`, run `juju run juju-norma-k8s/0 check-security`, verify `credential-available: true` and `k8s-api-reachable: true`. Deploy without `--trust`, verify `credential-available: false`. Also test `juju trust juju-norma-k8s` post-deploy followed by action re-run.
+
+### FR-040: Sudoer Overlay (extends US17)
+
+Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms it follows the subordinate overlay pattern.
+
+- [ ] T134 [US17] Update CI pack step in `.github/workflows/ci.yaml` to pack all three variants (principal, subordinate, sudoer) and upload as artifacts. The sudoer variant follows the same copy-overlay-and-pack pattern as the subordinate variant.
+
+**Checkpoint**: All new FRs (FR-028 through FR-040) have implementation and test coverage
 
 ---
 
@@ -533,11 +550,11 @@
 
 ---
 
-## Phase 30: Coverage Gaps (FR-033 through FR-037)
+## Phase 30: Coverage Gaps (FR-033 through FR-037, FR-038 through FR-040)
 
-**Purpose**: Close gaps identified by the Juju K8s capability coverage audit
+**Purpose**: Close gaps identified by the Juju K8s capability coverage audit and replacement target analysis
 
-**Goal**: Ensure the charm exercises ALL Juju operations on K8s charms — not just internal charm capabilities but every `juju` CLI operation that targets a K8s charm.
+**Goal**: Ensure the charm exercises ALL Juju operations on K8s charms — not just internal charm capabilities but every `juju` CLI operation that targets a K8s charm. Also close gaps needed to replace upstream CI test charms (NFR-005).
 
 ### FR-033: Expose/Unexpose (US14)
 
@@ -577,8 +594,8 @@
   - US2-US24 proceed in priority order
   - See cross-story dependencies below
 - **US25 (Phase 28)**: Depends on FR-027 (juju-info endpoint from T103)
-- **New FRs (Phase 29)**: Depends on corresponding US phases being complete
-- **Coverage Gaps (Phase 30)**: FR-033 through FR-037 — mostly integration tests, can parallelize
+- **New FRs (Phase 29)**: Depends on corresponding US phases being complete. FR-038 through FR-040 added for replacement target coverage.
+- **Coverage Gaps (Phase 30)**: FR-033 through FR-037, FR-038 through FR-040 — mostly integration tests, can parallelize
 - **CI Pipeline (Phase O1)**: Orthogonal — can start after Setup
 - **Integration Tests (Phase O2)**: Each test group after its story cluster
 - **Integration Infra (Phase O3)**: Orthogonal — can start after Phase 1
@@ -606,7 +623,7 @@
 
 **Phase 28 (US25)**: T103 must come first (adds endpoint), then T104+T105+T106 can parallelize (overlay, unit tests, integration tests on different files)
 
-**Phase 29 (New FRs)**: All FR tasks are independent of each other — T108-T114 can run in parallel since they touch different files and test files
+**Phase 29 (New FRs)**: All FR tasks are independent of each other — T108-T114 and T129-T134 can run in parallel since they touch different files and test files. T131+T133 must be sequential (charm code before integration test for credential-get).
 
 **Phase 30 (Coverage Gaps)**: T119-T128 are mostly independent. T123+T125 must be sequential (collector method before wiring). T119+T121 sequential (charm code before integration test). All other tasks can parallelize.
 
@@ -621,16 +638,16 @@ Phases 1-23 and O2-O3 are **COMPLETE**. The charm has 177 passing unit tests (14
 ### Remaining Work
 
 1. **Phase 28 (US25)**: Subordinate — add juju-info endpoint, create overlay, write tests
-2. **Phase 29 (New FRs)**: FR-028 (send_signal), FR-029 (force remove), FR-030 (storage xfail), FR-031 (sudoer overlay), FR-032 (parallel secrets)
+2. **Phase 29 (New FRs)**: FR-028 (send_signal), FR-029 (force remove), FR-030 (storage xfail), FR-031 (sudoer overlay), FR-032 (parallel secrets), FR-038 (busybox shell), FR-039 (credential-get), FR-040 (sudoer overlay CI)
 3. **Phase 30 (Coverage Gaps)**: FR-033 (expose/unexpose), FR-034 (model migration), FR-035 (goal-state), FR-036 (update-status-interval), FR-037 (ssh + constraints)
-4. **Phase O1 update**: CI multi-variant builds (T076)
+4. **Phase O1 update**: CI multi-variant builds (T076, T134)
 5. **Phase 24**: Polish tasks (validation, lint, quickstart check, self-sufficiency audit)
 
 ### Suggested Execution Order
 
 1. T103 (juju-info endpoint) -> T104 (subordinate overlay) -> T105+T106 (tests in parallel)
-2. T108+T110+T111+T112+T114 (new FR implementations — all parallel)
-3. T109+T113 (new FR tests/CI — after implementations)
+2. T108+T110+T111+T112+T114+T129+T131 (new FR implementations — all parallel)
+3. T109+T113+T130+T132+T133+T134 (new FR tests/CI — after implementations)
 4. T119+T123+T125 (expose status + goal-state charm code)
 5. T120+T121+T122+T124+T126+T127+T128 (integration tests — all parallel)
 6. T076 (CI multi-variant)
@@ -650,5 +667,6 @@ The MVP (US1 through US24) is fully implemented and tested. Remaining work is in
 - Tasks T082-T088 retain original IDs for backward compatibility with existing references
 - Tasks T103-T118 are new (added in 2026-02-18 plan refresh)
 - Tasks T119-T128 are new (added in 2026-02-18 coverage audit — FR-033 through FR-037)
+- Tasks T129-T134 are new (added in 2026-02-19 replacement target analysis — FR-038 through FR-040)
 - `src/charm.py` is fully implemented — remaining work is incremental additions
 - Commit after each completed story phase

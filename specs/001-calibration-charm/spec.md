@@ -25,6 +25,12 @@
 - Q: Where does the test subordinate charm for US25 come from? → A: Reuse the same juju-norma-k8s charm packed with a different charmcraft.yaml overlay that adds `subordinate: true` and changes the `juju-info` endpoint to `requires` with `scope: container`. This avoids maintaining a separate charm codebase — same code, different packaging.
 - Q: How should US10 AC4/AC6/AC7 (attach-storage, import-filesystem, deploy --attach-storage) be handled given Juju's known K8s limitations? → A: Write tests with `xfail(strict=False)` — tests exist and run, marked as expected failures until Juju implements K8s support. This documents expected behavior and auto-detects when support lands.
 
+### Session 2026-02-19
+
+- Q: NFR-005 claims norma-k8s replaces ALL K8s sidecar test charms, but 3 gaps exist (no shell in bare ROCK, no credential-get action, no sudoer overlay). Narrow NFR-005 or add capabilities? → A: Keep NFR-005 as-is (aspirational), add FRs for busybox shell slice in ROCK, credential-get action, and sudoer charmcraft overlay. All three are low-effort additions that fully close the gaps.
+- Q: Should storage portability (PV import across models, deploy --attach-storage) be a new US26 or is FR-030 sufficient? → A: FR-030 is sufficient — tests are added to existing storage integration tests under the existing test class, no new user story needed.
+- Q: Should the spec list the specific upstream test charms norma-k8s replaces? → A: Add a brief "Replacement Targets" subsection under Assumptions referencing k8s-charm-research.md for details.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Charm Lifecycle Events (Priority: P1)
@@ -560,7 +566,7 @@ feature exercised by the `container-resource` test charm in Juju CI. It
 validates that the sidecar pattern handles image swaps gracefully.
 
 **Independent Test**: Deploy the charm, verify active, run
-`juju attach-resource norma-k8s norma-image=<new-image>`, verify
+`juju attach-resource norma-k8s juju-norma-image=<new-image>`, verify
 pebble-ready fires again and charm recovers to active with potentially
 new workload version.
 
@@ -750,6 +756,9 @@ verify cleanup.
 - **FR-035**: The introspect action MUST include a `goal-state` section that reports the planned state of the model as returned by the `goal-state` hook tool, showing units and their status and relations and their status.
 - **FR-036**: Integration tests MUST verify `juju model-config update-status-hook-interval` by setting a short interval and confirming the charm's event ledger records `update-status` events at the expected frequency.
 - **FR-037**: Integration tests MUST verify `juju ssh juju-norma-k8s/0` connectivity into the K8s pod and `juju deploy` with `--constraints` (e.g., `mem=512M cores=1`) to confirm Juju correctly sets K8s resource requests/limits on the charm pod.
+- **FR-038**: The ROCK image MUST include a minimal POSIX shell (`/bin/sh` via busybox) to support `juju exec` and `juju ssh` operations that require shell interpretation inside the workload container. This enables the charm to replace alertmanager-k8s and snappass-test in the secrets_k8s suite where `juju exec --unit ... secret-add` is used.
+- **FR-039**: The `check-security` action MUST exercise the `credential-get` hook tool to retrieve K8s cloud credentials, hits the K8s API using those credentials, and reports the result. This enables replacement of juju-qa-credential-get-k8s in the sidecar suite. The action MUST require `--trust` at deploy time and fail gracefully without it.
+- **FR-040**: The sudoer build variant MUST be packaged as a charmcraft overlay (`charmcraft-sudoer.yaml`) following the same pattern as the subordinate overlay (`charmcraft-subordinate.yaml`), producing a third `.charm` artifact from the same source tree. CI packs all three variants (principal, subordinate, sudoer) in the pack step.
 
 ### Non-Functional Requirements
 
@@ -776,6 +785,23 @@ verify cleanup.
 - The charm name is `juju-norma-k8s`.
 - Integration test environment preparation is opt-in via `SETUP_ENVIRONMENT=1`. Without it, tests skip gracefully if prerequisites are missing.
 - CI runs integration tests against both Juju 3.x (`3/stable`) and Juju 4.x (`4/stable`) channels via matrix strategy.
+
+### Replacement Targets
+
+This charm is designed to replace the following Juju CI test charms (see `k8s-charm-research.md` for full analysis):
+
+| Charm Replaced | Suites | Enabling Capability |
+|---------------|--------|-------------------|
+| snappass-test | smoke_k8s, sidecar, secrets_k8s, ck | Deploy + HTTP health endpoint |
+| juju-qa-pebble-notices | sidecar | `trigger-notice` action (US13) |
+| juju-qa-pebble-checks | sidecar | `toggle-health` action (US11) |
+| sidecar-non-root | sidecar | Non-root by default (US17) |
+| juju-qa-credential-get-k8s | sidecar | `credential-get` action (FR-039) |
+| sidecar-sudoer | sidecar | Sudoer overlay (FR-040) |
+| juju-qa-container-resource | resources | OCI resource lifecycle (US21) |
+| postgresql-k8s | storage_k8s | PV import/attach (FR-030) |
+
+Suites that **must not** use norma-k8s: smoke_k8s_psql (real DB writes), deploy_caas (multi-app topology), controllercharm (controller metrics), coslite/kubeflow/ck (bundle deployments), dashboard (controller relation), caasadmission (no charm).
 
 ## Success Criteria *(mandatory)*
 

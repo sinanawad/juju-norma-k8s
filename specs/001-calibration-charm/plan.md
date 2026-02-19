@@ -32,7 +32,7 @@ source as a subordinate variant.
 event.defer() for control flow
 **Scale/Scope**: 25 user stories, 18 actions (+1 introspect in US22), 2 containers,
 8+ relation endpoints (including juju-info), 5 config options (one per type),
-2 named storages (data + logs), 37 functional requirements, 5 non-functional requirements
+2 named storages (data + logs), 40 functional requirements, 5 non-functional requirements
 
 ## Constitution Check
 
@@ -288,4 +288,7 @@ These requirements were added after the original planning and need task coverage
 | FR-035 | US22 | `goal-state` section in introspect action |
 | FR-036 | US1 | `update-status-hook-interval` model-config integration test |
 | FR-037 | All | `juju ssh` connectivity and `--constraints` deployment integration tests |
+| FR-038 | US23 | ROCK includes busybox shell (`/bin/sh`) for `juju exec`/`juju ssh` shell support |
+| FR-039 | US17 | `credential-get` hook tool exercise in check-security action |
+| FR-040 | US17 | Sudoer charmcraft overlay (`charmcraft-sudoer.yaml`) packed as third build variant |
 | NFR-005 | All | Self-sufficiency meta-requirement (audit task in Polish phase) |
