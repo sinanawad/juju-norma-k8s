@@ -25,12 +25,13 @@ parts:
   busybox:
     plugin: nil
     stage-packages:
-      - busybox-static_bins
+      - busybox_bins
     override-prime: |
       craftctl default
       # Create /bin/sh symlink for juju exec/ssh shell support (FR-038)
+      mkdir -p "${CRAFT_PRIME}/bin"
       if [ ! -e "${CRAFT_PRIME}/bin/sh" ]; then
-        ln -s busybox "${CRAFT_PRIME}/bin/sh"
+        ln -s /usr/bin/busybox "${CRAFT_PRIME}/bin/sh"
       fi
 
   tmp-dir:
