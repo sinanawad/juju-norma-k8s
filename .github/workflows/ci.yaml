@@ -50,7 +50,11 @@ jobs:
         run: sudo snap install charmcraft --classic
       - run: charmcraft fetch-libs
       - name: Pack principal charm
-        run: charmcraft pack
+        run: |
+          charmcraft pack
+          # Rename to a stable name so the subordinate pack doesn't overwrite it
+          # (both produce juju-norma-k8s_ubuntu-24.04-amd64.charm).
+          mv juju-norma-k8s_*.charm juju-norma-k8s_amd64.charm
       - name: Pack subordinate variant
         run: |
           cp charmcraft.yaml charmcraft-principal.yaml.bak
