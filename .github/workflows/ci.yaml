@@ -50,19 +50,18 @@ jobs:
         run: sudo snap install charmcraft --classic
       - run: charmcraft fetch-libs
       - name: Pack principal charm
-        run: |
-          charmcraft pack
-          # Rename to a stable name so the subordinate pack doesn't overwrite it
-          # (both produce juju-norma-k8s_ubuntu-24.04-amd64.charm).
-          mv juju-norma-k8s_*.charm juju-norma-k8s_amd64.charm
+        run: charmcraft pack
       - name: Pack subordinate variant
         run: |
+          # Save principal charm — subordinate pack produces the same filename.
+          mv juju-norma-k8s_*.charm principal.charm
           cp charmcraft.yaml charmcraft-principal.yaml.bak
           cp charmcraft-subordinate.yaml charmcraft.yaml
           charmcraft pack
           mv juju-norma-k8s_*.charm juju-norma-k8s-subordinate_amd64.charm
           cp charmcraft-principal.yaml.bak charmcraft.yaml
           rm charmcraft-principal.yaml.bak
+          mv principal.charm juju-norma-k8s_amd64.charm
       - name: Upload charm artifacts
         uses: actions/upload-artifact@v4
         with:
