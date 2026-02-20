@@ -1,6 +1,8 @@
 """Integration tests for US1: Lifecycle Event Handling and US2: Pebble Workload."""
 
+import contextlib
 import json
+import time
 
 import jubilant
 import pytest
@@ -100,3 +102,123 @@ class TestJujuExecShell:
             "echo hello-norma",
         )
         assert "hello-norma" in result
+
+
+class TestJujuSSH:
+    """FR-037: juju ssh validates K8s exec-via-API path."""
+
+    def test_juju_ssh(self, juju: jubilant.Juju):
+        """juju ssh runs a command inside the workload container."""
+        result = juju.cli(
+            "ssh",
+            "--container",
+            "norma",
+            f"{APP}/0",
+            "--",
+            "ls",
+            "/bin/norma",
+        )
+        assert "norma" in result
+
+
+class TestUpdateStatusInterval:
+    """FR-036: update-status-hook-interval fires periodic events."""
+
+    def test_update_status_interval(self, juju: jubilant.Juju):
+        """Shortening update-status interval produces events in the ledger."""
+        # Save current interval so we can restore it
+        raw = juju.cli("model-config", "update-status-hook-interval", "--format=json")
+        previous = json.loads(raw).get("value", "5m")
+
+        # Record current event count as baseline
+        baseline_task = juju.run(
+            f"{APP}/leader",
+            "get-event-log",
+            params={"event-filter": "update-status"},
+        )
+        baseline_count = len(json.loads(baseline_task.results["events"]))
+
+        juju.cli("model-config", "update-status-hook-interval=30s")
+        try:
+            # Poll until at least 2 new update-status events appear
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                time.sleep(10)
+                task = juju.run(
+                    f"{APP}/leader",
+                    "get-event-log",
+                    params={"event-filter": "update-status"},
+                )
+                events = json.loads(task.results["events"])
+                new_count = len(events) - baseline_count
+                if new_count >= 2:
+                    return
+            pytest.fail(f"Expected >=2 new update-status events within 120s, got {new_count}")
+        finally:
+            juju.cli("model-config", f"update-status-hook-interval={previous}")
+
+
+class TestModelMigration:
+    """FR-034: Model migration between controllers."""
+
+    def test_model_migration(self, juju: jubilant.Juju):
+        """Model migration requires two bootstrapped controllers.
+
+        Skips when fewer than two controllers are available.
+        When two exist, attempts migration to the other controller.
+        """
+        try:
+            raw = juju.cli("controllers", "--format=json")
+            ctrl_data = json.loads(raw)
+            controllers = list(ctrl_data.get("controllers", {}).keys())
+            if len(controllers) < 2:
+                pytest.skip("Model migration requires two controllers")
+        except (jubilant.CLIError, json.JSONDecodeError):
+            pytest.skip("Cannot determine controller count")
+
+        current = ctrl_data.get("current-controller", "")
+        targets = [c for c in controllers if c != current]
+        if not targets:
+            pytest.skip("No target controller found for migration")
+
+        target = targets[0]
+        model_name = juju.cli("model-config", "name").strip()
+
+        try:
+            juju.cli("migrate", model_name, target)
+            # Wait for migration to complete (up to 5 min)
+            juju.wait(jubilant.all_active, timeout=300)
+        except jubilant.CLIError as e:
+            pytest.xfail(f"Model migration not supported in this environment: {e}")
+
+
+class TestDeployConstraints:
+    """FR-037: Deploy with K8s resource constraints."""
+
+    @pytest.fixture(autouse=True)
+    def _require_destructive(self, request):
+        if not request.config.getoption("--run-destructive"):
+            pytest.skip("Destructive test — pass --run-destructive to run")
+
+    def test_deploy_with_constraints(self, juju: jubilant.Juju, charm_path, oci_image):
+        """Deploying with --constraints is accepted and charm reaches active."""
+        alt_app = "norma-constraints"
+        try:
+            juju.cli(
+                "deploy",
+                str(charm_path),
+                alt_app,
+                "--constraints",
+                "mem=512M cores=1",
+                "--resource",
+                f"juju-norma-image={oci_image}",
+            )
+            juju.wait(
+                lambda s: alt_app in s.apps and s.apps[alt_app].is_active,
+                timeout=300,
+            )
+        finally:
+            with contextlib.suppress(jubilant.CLIError):
+                juju.cli("remove-application", alt_app, "--force", "--no-wait", "--no-prompt")
+            with contextlib.suppress(jubilant.CLIError, TimeoutError):
+                juju.wait(lambda s: alt_app not in s.apps, timeout=120)

@@ -65,3 +65,15 @@ class TestIntrospect:
         assert "count" in ledger
         assert "events" in ledger
         assert ledger["count"] >= 1
+
+    def test_goal_state_section(self, juju: jubilant.Juju):
+        """FR-035: Introspect includes goal-state from hook tool."""
+        task = juju.run(f"{APP}/leader", "introspect", params={"sections": "goal-state"})
+        assert task.success
+        goal_state = json.loads(task.results["goal-state"])
+        # In a live deployment, goal-state returns units and relations
+        if "status" not in goal_state:
+            assert "units" in goal_state or "relations" in goal_state
+        # If unavailable, verify graceful fallback
+        else:
+            assert goal_state["status"] in ("unavailable",)

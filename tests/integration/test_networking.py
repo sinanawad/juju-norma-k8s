@@ -1,5 +1,6 @@
-"""Integration tests for US14: Networking (open ports, bindings)."""
+"""Integration tests for US14: Networking (open ports, bindings, expose)."""
 
+import contextlib
 import json
 
 import jubilant
@@ -25,3 +26,37 @@ class TestNetworking:
         status = juju.status()
         unit = next(iter(status.apps[APP].units.values()))
         assert unit.address, "Unit should have an IP address"
+
+    def test_exposed_key_present(self, juju: jubilant.Juju):
+        """FR-033: test-networking reports exposed status key."""
+        task = juju.run(f"{APP}/leader", "test-networking")
+        assert "exposed" in task.results
+
+
+class TestExpose:
+    """FR-033: Expose and unexpose application via CLI."""
+
+    def _wait_exposed(self, juju: jubilant.Juju, expected: bool, timeout: int = 30):
+        """Poll juju status until exposed matches expected value."""
+        import time
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            raw = juju.cli("status", "--format=json")
+            status = json.loads(raw)
+            if status["applications"][APP].get("exposed") is expected:
+                return
+            time.sleep(2)
+        raise AssertionError(f"Timed out waiting for exposed={expected}")
+
+    def test_expose_unexpose(self, juju: jubilant.Juju):
+        """juju expose/unexpose toggles exposed flag in juju status."""
+        try:
+            juju.cli("expose", APP)
+            self._wait_exposed(juju, True)
+
+            juju.cli("unexpose", APP)
+            self._wait_exposed(juju, False)
+        finally:
+            with contextlib.suppress(jubilant.CLIError):
+                juju.cli("unexpose", APP)

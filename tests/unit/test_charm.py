@@ -1601,6 +1601,15 @@ class TestNetworking:
         ports = json.loads(ctx.action_results["opened-ports"])
         assert "8080/tcp" in ports
 
+    def test_test_networking_reports_exposed_status(self):
+        """FR-033: test-networking includes exposed status key."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("test-networking"), state)
+        assert "exposed" in ctx.action_results
+
     def test_test_networking_returns_bindings(self):
         """test-networking action reports network bindings."""
         ctx = ops.testing.Context(NormaK8sCharm)
@@ -2283,6 +2292,23 @@ class TestIntrospectAction:
         results = ctx.action_results
         assert "config" in results
         assert "nonexistent" not in results
+
+    def test_goal_state_graceful_degradation(self):
+        """FR-035: goal-state returns fallback when hook tool unavailable."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            leader=True,
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[
+                ops.testing.PeerRelation(
+                    endpoint="norma-peers",
+                    peers_data={},
+                ),
+            ],
+        )
+        ctx.run(ctx.on.action("introspect", params={"sections": "goal-state"}), state)
+        result = json.loads(ctx.action_results["goal-state"])
+        assert result["status"] == "unavailable"
 
     def test_non_leader_handling(self):
         ctx = ops.testing.Context(NormaK8sCharm)

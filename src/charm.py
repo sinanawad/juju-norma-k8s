@@ -43,6 +43,7 @@ REPORT_SECTIONS = (
     "storage",
     "containers",
     "secrets",
+    "goal-state",
 )
 
 
@@ -887,6 +888,7 @@ class NormaK8sCharm(ops.CharmBase):
             {
                 "opened-ports": json.dumps(port_list),
                 "bindings": json.dumps(bindings),
+                "exposed": "unknown",
             }
         )
 
@@ -998,6 +1000,7 @@ class NormaK8sCharm(ops.CharmBase):
             "storage": self._collect_storage,
             "containers": self._collect_containers,
             "secrets": self._collect_secrets,
+            "goal-state": self._collect_goal_state,
         }
 
         report: dict[str, str] = {
@@ -1104,6 +1107,14 @@ class NormaK8sCharm(ops.CharmBase):
                 info["marker-exists"] = "unknown"
             result[s_name] = info
         return result
+
+    def _collect_goal_state(self) -> dict:
+        """Collect goal-state from the goal-state hook tool (FR-035)."""
+        try:
+            raw = self.model._backend._run_tool("goal-state", "--format", "json")
+            return json.loads(raw)
+        except Exception:
+            return {"status": "unavailable", "reason": "goal-state hook tool not accessible"}
 
     def _collect_containers(self) -> dict:
         """Collect container connectivity status."""
