@@ -5,12 +5,12 @@
 
 **Tests**: Included per constitution Principle VI (Three-Tier Testing) and SC-007.
 
-**Organization**: Tasks grouped by user story for independent implementation. 26 user stories from spec.md, organized in priority order (P1-P26). 44 functional requirements (FR-001 through FR-044) and 5 non-functional requirements.
+**Organization**: Tasks grouped by user story for independent implementation. 25 user stories from spec.md (US1-US24, US26; US25 removed — K8s subordinates unsupported), organized in priority order. 44 functional requirements (FR-001 through FR-044) and 5 non-functional requirements.
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story (US1-US25)
+- **[Story]**: Which user story (US1-US24, US26)
 - Exact file paths included in descriptions
 
 ---
@@ -478,7 +478,7 @@ Tasks T103-T107 are no longer applicable. The `juju-info` provides endpoint is r
 
 Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms the overlay pattern.
 
-- [ ] T134 [US17] Update CI pack step in `.github/workflows/ci.yaml` to pack both variants (principal, sudoer) and upload as artifacts. The sudoer variant uses a copy-overlay-and-pack pattern.
+- ~~[ ] T134 [US17] Update CI pack step — consolidated into T076 (CI multi-variant pack)~~
 
 **Checkpoint**: All new FRs (FR-028 through FR-040) have implementation and test coverage
 
@@ -619,7 +619,7 @@ Note: T112 already creates `charmcraft-sudoer.yaml`. FR-040 confirms the overlay
   - US1 (Lifecycle) is the MVP — complete first
   - US2-US24 proceed in priority order
   - See cross-story dependencies below
-- **US25 (Phase 28)**: Depends on FR-027 (juju-info endpoint from T103)
+- ~~**US25 (Phase 28)**: REMOVED — K8s subordinates unsupported (see spec.md)~~
 - **New FRs (Phase 29)**: Depends on corresponding US phases being complete. FR-038 through FR-040 added for replacement target coverage.
 - **Coverage Gaps (Phase 30)**: FR-033 through FR-037, FR-038 through FR-040 — mostly integration tests, can parallelize
 - **Publication (Phase 31)**: US26 — depends on Phase O1 (CI) existing. Should be done after all stories are complete.
@@ -678,7 +678,7 @@ Phases 1-23 and O2-O3 are **COMPLETE**. The charm has 177 passing unit tests (14
 
 ### MVP First (Complete)
 
-The MVP (US1 through US24) is fully implemented and tested. Remaining work is incremental feature additions (US25, new FRs) and polish.
+The MVP (US1 through US24) is fully implemented and tested. Remaining work is incremental feature additions (new FRs) and polish.
 
 ---
 

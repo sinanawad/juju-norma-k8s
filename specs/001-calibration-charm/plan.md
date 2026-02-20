@@ -26,9 +26,9 @@ replacing ALL existing Juju K8s sidecar test charms (NFR-005).
 **Performance Goals**: Active in <120s, scale 1->3 in <180s, actions <30s
 **Constraints**: Non-root execution, chiselled ROCK, no StoredState, no
 event.defer() for control flow
-**Scale/Scope**: 25 user stories, 18 actions (+1 introspect in US22), 2 containers,
+**Scale/Scope**: 25 user stories (US1-US24, US26; US25 removed), 18 actions (+1 introspect in US22), 2 containers,
 8+ relation endpoints (including juju-info), 5 config options (one per type),
-2 named storages (data + logs), 40 functional requirements, 5 non-functional requirements
+2 named storages (data + logs), 44 functional requirements, 5 non-functional requirements
 
 ## Constitution Check
 

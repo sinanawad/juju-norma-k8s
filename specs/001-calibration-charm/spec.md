@@ -792,7 +792,7 @@ subordinate-specific code, overlay, tests, and CI jobs have been removed.
 - **NFR-002**: Integration tests MUST support testing against multiple Juju versions via the `JUJU_CHANNEL` environment variable (e.g., `3/stable`, `4/stable`).
 - **NFR-003**: Integration test environment setup MUST be idempotent -- safe to re-run on an already-configured machine with no side effects.
 - **NFR-004**: Integration tests MUST support reusing an existing deployment via `JUJU_MODEL` for fast local iteration, or creating a fresh temporary model for CI isolation.
-- **NFR-005**: The charm MUST be self-sufficient as a single replacement for ALL Juju K8s sidecar test charms. Every Juju K8s charm API surface (lifecycle events, Pebble operations, relations, storage, secrets, actions, status, networking, expose/unexpose, security, observability, subordinates, cross-model relations, model migration, goal-state, model-config, SSH access, K8s constraints) MUST be exercisable through this one charm. No additional test charms should be needed for Juju K8s CI validation.
+- **NFR-005**: The charm MUST be self-sufficient as a single replacement for ALL Juju K8s sidecar test charms. Every Juju K8s charm API surface (lifecycle events, Pebble operations, relations, storage, secrets, actions, status, networking, expose/unexpose, security, observability, cross-model relations, model migration, goal-state, model-config, SSH access, K8s constraints) MUST be exercisable through this one charm. No additional test charms should be needed for Juju K8s CI validation. Note: subordinate charms are excluded — they are a machine-model-only feature per Juju documentation.
 
 ### Key Entities
 
