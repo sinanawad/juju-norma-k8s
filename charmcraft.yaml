@@ -1,7 +1,7 @@
 type: charm
 name: juju-norma-k8s
-title: Norma Calibration
-summary: Juju K8s calibration charm exercising all charm features
+title: Juju K8s Calibration Charm
+summary: A k8s calibration charm to exercise all charm features
 description: |
   A comprehensive calibration charm for Juju CI that exercises all features
   and capabilities relevant to Kubernetes charms. Each feature is testable
@@ -21,6 +21,7 @@ parts:
     override-build: |
       craftctl default
       git describe --always > $CRAFT_PART_INSTALL/version
+      cp $CRAFT_PART_SRC/icon.svg $CRAFT_PART_INSTALL/icon.svg
 
 assumes:
   - juju >= 3.6
@@ -44,7 +45,7 @@ containers:
 resources:
   juju-norma-image:
     type: oci-image
-    upstream-source: localhost:32000/juju-norma:0.1.0
+    upstream-source: ghcr.io/sinanawad/juju-norma:latest
     description: Chiselled ROCK with Go calibration binary
 
 storage:

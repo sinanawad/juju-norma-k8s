@@ -127,6 +127,15 @@ Feature specs, plans, and tasks live under `specs/<NNN>-<feature-name>/`. Refere
 
 GitHub Actions with `canonical/charming-actions`. PR workflow: lint → unit → lib-check → pack → integration. Release publishes to CharmHub edge. OCI workflow builds chiselled ROCKs. Dependabot covers Actions + uv deps.
 
+## Juju Ecosystem Knowledge
+
+@/data/dev/juju-brain/JUJU.md
+
+### Project-specific Juju notes
+
+- **jubilant quirks**: `j.cli()` auto-injects `--model` — use `include_model=False` for `destroy-model`, `add-model`. `temp_model()` doesn't accept `cli_binary` — manage model lifecycle manually for custom juju binaries.
+- **Integration test env vars**: `JUJU_CLI`, `JUJU_CONTROLLER`, `JUJU_CLOUD`, `FRESH_CONTROLLER=1`, `NORMA_IMAGE`, `KEEP_MODEL=1`
+
 ## Active Technologies
 - Python 3.12+ (charm, ubuntu@24.04), Go 1.22+ (workload binary) (001-calibration-charm)
 - `ops` (charm framework), `ops[testing]` (unit tests), standard library `json` for serialization (001-calibration-charm)

@@ -33,3 +33,8 @@ Thumbs.db
 
 # Docker
 workload/Dockerfile
+
+# Secrets (never commit)
+*-token.txt
+*.token
+charmhub-token.txt
