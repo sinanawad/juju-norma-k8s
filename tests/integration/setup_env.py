@@ -107,15 +107,48 @@ def _register_microk8s_cloud(juju_cli: str = "juju") -> None:
     return cloud_name
 
 
+def destroy_controller(controller: str, juju_cli: str = "juju") -> None:
+    """Destroy a Juju controller and all its models."""
+    if not is_controller_bootstrapped(controller, juju_cli):
+        logger.info("controller %s does not exist, nothing to destroy", controller)
+        return
+    logger.info("destroying controller %s", controller)
+    subprocess.run(
+        [
+            juju_cli,
+            "destroy-controller",
+            controller,
+            "--destroy-all-models",
+            "--no-prompt",
+            "--destroy-storage",
+        ],
+        timeout=BOOTSTRAP_TIMEOUT,
+        check=True,
+    )
+    logger.info("controller %s destroyed", controller)
+
+
 def bootstrap_controller(
     controller: str = "microk8s-localhost",
+    cloud: str | None = None,
     juju_cli: str = "juju",
+    *,
+    force_fresh: bool = False,
 ) -> None:
-    """Bootstrap a Juju controller on microk8s if it does not exist."""
-    if is_controller_bootstrapped(controller, juju_cli):
+    """Bootstrap a Juju controller on microk8s.
+
+    Args:
+        controller: Controller name.
+        cloud: Cloud name. If None, registers microk8s via add-k8s.
+        juju_cli: Path to juju binary.
+        force_fresh: If True, destroy existing controller first.
+    """
+    if force_fresh:
+        destroy_controller(controller, juju_cli)
+    elif is_controller_bootstrapped(controller, juju_cli):
         logger.info("controller %s already bootstrapped", controller)
         return
-    cloud_name = _register_microk8s_cloud(juju_cli)
+    cloud_name = cloud or _register_microk8s_cloud(juju_cli)
     # Stream output instead of capturing — bootstrap is long-running and
     # we want to see progress in CI logs.
     logger.info("$ %s bootstrap %s %s", juju_cli, cloud_name, controller)

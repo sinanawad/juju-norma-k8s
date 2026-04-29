@@ -108,17 +108,15 @@ class TestJujuSSH:
     """FR-037: juju ssh validates K8s exec-via-API path."""
 
     def test_juju_ssh(self, juju: jubilant.Juju):
-        """juju ssh runs a command inside the workload container."""
+        """juju ssh into the charm container (workload ROCK is bare/distroless)."""
         result = juju.cli(
             "ssh",
             "--container",
-            "norma",
+            "charm",
             f"{APP}/0",
-            "--",
-            "ls",
-            "/bin/norma",
+            "ls /var/lib/juju",
         )
-        assert "norma" in result
+        assert "agents" in result
 
 
 class TestUpdateStatusInterval:

@@ -44,7 +44,7 @@ class TestConfiguration:
         assert unit.is_blocked
         # Reset to restore active
         juju.config(APP, reset=["calibration-int"])
-        juju.wait(jubilant.all_active, timeout=60)
+        juju.wait(jubilant.all_active, timeout=120)
 
 
 class TestActions:

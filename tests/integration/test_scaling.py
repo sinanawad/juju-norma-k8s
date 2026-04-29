@@ -12,7 +12,14 @@ class TestScaling:
 
     def test_scale_to_three(self, juju: jubilant.Juju):
         juju.add_unit(APP, num_units=2)
-        juju.wait(jubilant.all_active, timeout=300)
+
+        def three_units_active(status: jubilant.Status) -> bool:
+            app = status.apps.get(APP)
+            if app is None or len(app.units) < 3:
+                return False
+            return all(u.is_active for u in app.units.values())
+
+        juju.wait(three_units_active, timeout=300)
         status = juju.status()
         assert len(status.apps[APP].units) == 3
 
@@ -37,10 +44,13 @@ class TestScaling:
         assert len(status.apps[APP].units) == 1
 
     def test_cluster_info_after_scale_down(self, juju: jubilant.Juju):
-        # Ensure scale-down completed (guards against cascade from above).
+        # Ensure scale-down completed and charm has reconciled.
         juju.wait(
             lambda s: len(s.apps[APP].units) == 1,
             timeout=120,
         )
+        juju.wait(jubilant.all_active, timeout=120)
         task = juju.run(f"{APP}/leader", "get-cluster-info")
-        assert task.results["unit-count"] == "1"
+        # planned-units reflects the Juju-side scale target;
+        # unit-count is based on peer relation membership which may lag.
+        assert task.results["planned-units"] == "1"

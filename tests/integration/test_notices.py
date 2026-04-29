@@ -1,8 +1,9 @@
 """Integration tests for US13: Pebble Custom Notices.
 
-Note: Juju 4.0.2 does not dispatch pebble-custom-notice events.
-These tests verify the trigger-notice action works; the event dispatch
-is a known Juju 4 WIP limitation to re-test later.
+Note: Neither Juju 3.6 nor 4.0 dispatch pebble-custom-notice events.
+The Juju agent does not poll Pebble for custom notices yet.  The first
+two tests verify the trigger-notice action works (notice is created in
+Pebble); the third is an xfail canary for when dispatch is implemented.
 """
 
 import json
@@ -31,7 +32,9 @@ class TestNotices:
         )
         assert task.success
 
-    @pytest.mark.xfail(reason="Juju 4.0.2 WIP: custom notices not dispatched")
+    @pytest.mark.xfail(
+        reason="Juju agent does not dispatch pebble-custom-notice events (3.6 + 4.0)"
+    )
     def test_notice_event_dispatched(self, juju: jubilant.Juju):
         """Verify pebble-custom-notice appears in event ledger."""
         task = juju.run(

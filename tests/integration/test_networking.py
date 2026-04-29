@@ -52,6 +52,8 @@ class TestExpose:
     def test_expose_unexpose(self, juju: jubilant.Juju):
         """juju expose/unexpose toggles exposed flag in juju status."""
         try:
+            # Juju 3.6 requires juju-external-hostname for K8s expose.
+            juju.cli("config", APP, "juju-external-hostname=test.local")
             juju.cli("expose", APP)
             self._wait_exposed(juju, True)
 
@@ -60,3 +62,4 @@ class TestExpose:
         finally:
             with contextlib.suppress(jubilant.CLIError):
                 juju.cli("unexpose", APP)
+                juju.cli("config", APP, "--reset", "juju-external-hostname")

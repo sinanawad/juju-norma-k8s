@@ -1,9 +1,13 @@
 """Integration tests for US19: Cross-Model Relations.
 
-Note: CMR tests require creating a second model and deploying there.
-These are skipped if JUJU_MODEL is set (existing deployment mode)
-since they need model creation privileges.
+Tests deploy a second norma instance in a separate model, create a
+cross-model offer on the ``calibration-provider`` endpoint, consume it
+from the second model, integrate, and verify relation data flows.
 """
+
+import contextlib
+import json
+import uuid
 
 import jubilant
 import pytest
@@ -11,20 +15,112 @@ import pytest
 APP = "juju-norma-k8s"
 
 
-@pytest.mark.skip(reason="CMR requires multi-model setup; run manually via CLI")
 class TestCMR:
-    """US19: Cross-model relation offer/consume cycle.
+    """US19: Cross-model relation offer/consume cycle."""
 
-    These tests are intentionally skipped in automated runs because they
-    require model creation and cross-model offer/consume which is complex
-    to automate reliably. CMR was validated via CLI acceptance testing.
-    """
+    @pytest.fixture(autouse=True)
+    def cmr_setup(self, juju: jubilant.Juju, charm_path, oci_image):
+        """Set up a second model with norma for CMR testing."""
+        self.model_a = juju
+        cli = juju.cli_binary if hasattr(juju, "cli_binary") else "juju"
 
-    def test_cmr_offer_create(self, juju: jubilant.Juju):
-        pass
+        # Create model B on the same controller.
+        self.model_b_name = f"cmr-{uuid.uuid4().hex[:8]}"
+        no_model = jubilant.Juju(cli_binary=cli)
+        controller = no_model.cli(
+            "show-model",
+            self.model_a.model,
+            "--format=json",
+            include_model=False,
+        )
+        ctrl_name = json.loads(controller).get(self.model_a.model, {}).get("controller-name", "")
 
-    def test_cmr_consume_and_integrate(self, juju: jubilant.Juju):
-        pass
+        # Detect cloud name from the current model.
+        model_info = json.loads(controller).get(self.model_a.model, {})
+        cloud = model_info.get("cloud", "microk8s")
 
-    def test_cmr_relation_data_exchange(self, juju: jubilant.Juju):
-        pass
+        no_model.cli("add-model", self.model_b_name, cloud, "-c", ctrl_name)
+        self.juju_b = jubilant.Juju(model=self.model_b_name, cli_binary=cli)
+
+        # Deploy norma in model B.
+        from .conftest import _deploy_with_retry
+
+        _deploy_with_retry(self.juju_b, str(charm_path), oci_image)
+        self.juju_b.wait(jubilant.all_active, timeout=300)
+
+        yield
+
+        # Cleanup: remove offer, destroy model B.
+        with contextlib.suppress(jubilant.CLIError):
+            self.model_a.cli(
+                "remove-offer",
+                f"{self.model_a.model}.{APP}:calibration-provider",
+                "--force",
+                include_model=False,
+            )
+        no_model.cli(
+            "destroy-model",
+            self.model_b_name,
+            "--no-prompt",
+            "--destroy-storage",
+        )
+
+    def _offer(self):
+        """Create a CMR offer from model A's calibration-provider."""
+        model = self.model_a.model
+        self.model_a.cli(
+            "offer",
+            f"{model}.{APP}:calibration-provider",
+            include_model=False,
+        )
+
+    def _consume_and_integrate(self):
+        """Consume the offer in model B and integrate."""
+        model_a = self.model_a.model
+        # Use an alias — model B already has a local app with the same name.
+        self.juju_b.cli(
+            "consume",
+            f"{model_a}.{APP}",
+            "remote-norma",
+            include_model=False,
+        )
+        self.juju_b.cli(
+            "integrate", "remote-norma:calibration-provider", f"{APP}:calibration-requirer"
+        )
+
+    def test_cmr_offer_create(self):
+        """Create an offer on the calibration-provider endpoint."""
+        self._offer()
+        result = self.model_a.cli(
+            "show-offer",
+            f"{self.model_a.model}.{APP}",
+            include_model=False,
+        )
+        assert "calibration-provider" in result
+
+    def test_cmr_consume_and_integrate(self):
+        """Consume the offer from model B and integrate."""
+        self._offer()
+        self._consume_and_integrate()
+        self.juju_b.wait(jubilant.all_active, timeout=120)
+
+        # Verify relation exists.
+        status = self.juju_b.status()
+        app_relations = status.apps[APP].relations
+        assert any(
+            "calibration" in iface
+            for rels in app_relations.values()
+            for rel in (rels if isinstance(rels, list) else [rels])
+            for iface in ([rel.interface] if hasattr(rel, "interface") else [str(rel)])
+        ), f"Expected calibration relation, got: {app_relations}"
+
+    def test_cmr_relation_data_exchange(self):
+        """Verify relation data flows across models."""
+        self._offer()
+        self._consume_and_integrate()
+        self.juju_b.wait(jubilant.all_active, timeout=120)
+
+        # Check relation data via introspect action on model A.
+        task = self.model_a.run(f"{APP}/leader", "introspect", params={"sections": "relations"})
+        assert task.success
+        assert "calibration-provider" in task.results.get("relations", "")

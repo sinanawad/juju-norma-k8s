@@ -7,21 +7,24 @@ Usage modes:
     2. Fresh temp model (default, requires working juju + microk8s):
        make integration
 
-    3. Custom juju binary:
-       JUJU_CLI=~/go/bin/juju make integration
+    3. Custom juju binary with fresh controller:
+       JUJU_CLI=~/go/bin/juju JUJU_CONTROLLER=k8s make integration
 
     4. Full auto-setup on a fresh machine:
        SETUP_ENVIRONMENT=1 make integration
 
 Environment variables:
     SETUP_ENVIRONMENT   Set to "1" to auto-install snaps + bootstrap controller.
+    FRESH_CONTROLLER    Set to "1" to destroy and re-bootstrap the controller
+                        before tests (ensures jujud matches the client version).
     JUJU_CHANNEL        Juju snap channel (default: "3.6/stable").
     MICROK8S_CHANNEL    microk8s snap channel (default: "1.34-strict/stable").
     JUJU_CLI            Path to juju binary (default: "juju").
     JUJU_MODEL          Reuse an existing model (skip deploy).
     JUJU_CONTROLLER     Controller name (default: "microk8s-localhost").
+    JUJU_CLOUD          Cloud name for add-model (default: "microk8s").
     CHARM_PATH          Path to .charm file or directory containing one.
-    NORMA_IMAGE         OCI image URI (default: "localhost:32000/juju-norma:0.1.0").
+    NORMA_IMAGE         OCI image URI (default: "ghcr.io/sinanawad/juju-norma:latest").
     KEEP_MODEL          Set to "1" to keep the model after tests (debugging).
 """
 
@@ -29,12 +32,13 @@ import logging
 import os
 import pathlib
 import subprocess
+import time
 import uuid
 
 import jubilant
 import pytest
 
-from .setup_env import SetupError, check_prerequisites, ensure_environment
+from .setup_env import SetupError, bootstrap_controller, check_prerequisites, ensure_environment
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +55,41 @@ def pytest_addoption(parser):
 
 APP = "juju-norma-k8s"
 CHARM_FILE_GLOB = "*norma-k8s_*.charm"
-OCI_IMAGE_DEFAULT = "localhost:32000/juju-norma:0.1.0"
+OCI_IMAGE_DEFAULT = "ghcr.io/sinanawad/juju-norma:latest"
+CONTROLLER_DEFAULT = "microk8s-localhost"
+CLOUD_DEFAULT = "microk8s"
 RESOURCE_NAME = "juju-norma-image"
+DEPLOY_RETRIES = 3
+DEPLOY_RETRY_DELAY = 5  # seconds
+
+
+def _deploy_with_retry(j: jubilant.Juju, charm_path: str, oci_image: str) -> None:
+    """Deploy the charm, retrying on the OCI resource race (juju/juju#21456).
+
+    The server-side ``deployResources`` races with ``Deploy`` — the resource
+    upload hits the API before the application row exists.  A simple retry
+    after a short sleep is sufficient because the application is created
+    within milliseconds of the first attempt.
+    """
+    for attempt in range(1, DEPLOY_RETRIES + 1):
+        try:
+            j.deploy(
+                charm_path,
+                app=APP,
+                resources={RESOURCE_NAME: oci_image},
+            )
+            return
+        except jubilant.CLIError as exc:
+            if "not found" in str(exc) and attempt < DEPLOY_RETRIES:
+                logger.warning(
+                    "deploy attempt %d/%d hit resource race, retrying in %ds",
+                    attempt,
+                    DEPLOY_RETRIES,
+                    DEPLOY_RETRY_DELAY,
+                )
+                time.sleep(DEPLOY_RETRY_DELAY)
+                continue
+            raise
 
 
 def _detect_juju_major_version() -> int:
@@ -95,11 +132,14 @@ def environment_ready():
     """Ensure integration test prerequisites are available.
 
     When ``SETUP_ENVIRONMENT=1`` is set, install snaps and bootstrap a
-    controller automatically.  Otherwise just verify that the tools are
-    present and skip the entire session if they are not.
+    controller automatically.  When ``FRESH_CONTROLLER=1`` is set,
+    destroy any existing controller and re-bootstrap so that the
+    controller jujud matches the client version.  Otherwise just verify
+    that the tools are present and skip the session if they are not.
     """
     juju_cli = _env("JUJU_CLI", "juju")
-    controller = _env("JUJU_CONTROLLER", "microk8s-localhost")
+    controller = _env("JUJU_CONTROLLER", CONTROLLER_DEFAULT)
+    cloud = _env("JUJU_CLOUD", CLOUD_DEFAULT)
 
     if _env("SETUP_ENVIRONMENT") == "1":
         try:
@@ -115,6 +155,17 @@ def environment_ready():
         missing = check_prerequisites(juju_cli)
         if missing:
             pytest.skip(f"Prerequisites missing (set SETUP_ENVIRONMENT=1): {', '.join(missing)}")
+
+    if _env("FRESH_CONTROLLER") == "1":
+        try:
+            bootstrap_controller(
+                controller=controller,
+                cloud=cloud,
+                juju_cli=juju_cli,
+                force_fresh=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            pytest.fail(f"Fresh controller bootstrap failed: {exc.cmd!r}\nstderr: {exc.stderr}")
 
 
 @pytest.fixture(scope="session")
@@ -152,6 +203,7 @@ def juju(environment_ready, charm_path, oci_image):
     model = _env("JUJU_MODEL")
     cli = _env("JUJU_CLI")
     controller = _env("JUJU_CONTROLLER", "microk8s-localhost")
+    cloud = _env("JUJU_CLOUD", "microk8s")
     keep = _env("KEEP_MODEL") == "1"
 
     if model:
@@ -164,28 +216,25 @@ def juju(environment_ready, charm_path, oci_image):
     if cli:
         # Manual lifecycle — temp_model() ignores cli_binary.
         model_name = f"test-{uuid.uuid4().hex[:8]}"
-        j = jubilant.Juju(cli_binary=cli)
-        j.cli("add-model", model_name, controller)
+        no_model = jubilant.Juju(cli_binary=cli)
+        no_model.cli("add-model", model_name, cloud, "-c", controller)
         j = jubilant.Juju(model=model_name, cli_binary=cli)
         try:
-            j.deploy(
-                str(charm_path),
-                app=APP,
-                resources={RESOURCE_NAME: oci_image},
-            )
+            _deploy_with_retry(j, str(charm_path), oci_image)
             j.wait(jubilant.all_active, timeout=300)
             yield j
         finally:
             if not keep:
-                j.cli("destroy-model", model_name, "--no-prompt", "--destroy-storage")
+                no_model.cli(
+                    "destroy-model",
+                    model_name,
+                    "--no-prompt",
+                    "--destroy-storage",
+                )
         return
 
     # Default path — let jubilant manage the model.
     with jubilant.temp_model(controller=controller) as j:
-        j.deploy(
-            str(charm_path),
-            app=APP,
-            resources={RESOURCE_NAME: oci_image},
-        )
+        _deploy_with_retry(j, str(charm_path), oci_image)
         j.wait(jubilant.all_active, timeout=300)
         yield j
