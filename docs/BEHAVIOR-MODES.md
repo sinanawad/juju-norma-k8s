@@ -1,32 +1,32 @@
-# Citizenship test-bed modes
+# Test-bed modes
 
-The charm exposes a `bad-citizenship-mode` config option that lets a
-single deployed instance simulate a specific bad-citizenship pattern.
-This file documents what each mode does, which `juju citizenship`
-protocol clause it violates, and whether the current v1 `juju citizen`
+The charm exposes a `bad-behavior-mode` config option that lets a
+single deployed instance simulate a specific bad-behavior pattern.
+This file documents what each mode does, which `juju advisorship`
+protocol clause it violates, and whether the current v1 `juju advisor`
 detector catches it.
 
 The default `none` preserves the charm's well-behaved baseline. The
-charm is still used by its own CI as a "good citizen" reference; the
+charm is still used by its own CI as a "compliant charm" reference; the
 test-bed modes are opt-in per deployed application.
 
 ## Quick start
 
 ```bash
-# Deploy a good citizen
-juju deploy ./juju-norma-k8s_amd64.charm good-citizen \
+# Deploy a compliant charm
+juju deploy ./juju-norma-k8s_amd64.charm compliant-charm \
     --resource juju-norma-image=localhost:32000/juju-norma:0.1.0 --trust
 
-# Deploy a bad citizen alongside it
+# Deploy a misbehaving charm alongside it
 juju deploy ./juju-norma-k8s_amd64.charm bad-active \
     --resource juju-norma-image=localhost:32000/juju-norma:0.1.0 --trust \
-    --config bad-citizenship-mode=active-with-message
+    --config bad-behavior-mode=active-with-message
 
 # Or change an existing deploy
-juju config bad-active bad-citizenship-mode=blocked-no-message
+juju config bad-active bad-behavior-mode=blocked-no-message
 ```
 
-Run `juju citizen` once across the model and observe how each instance
+Run `juju advisor` once across the model and observe how each instance
 surfaces (or does not surface) findings.
 
 ## Mode catalogue
@@ -34,20 +34,20 @@ surfaces (or does not surface) findings.
 ### `none` (default)
 
 Well-behaved baseline. The charm emits `ActiveStatus()` with empty
-message (per §4c.2 convention). v1 `juju citizen` returns no findings.
+message (per §4c.2 convention). v1 `juju advisor` returns no findings.
 
 ### `active-with-message`
 
 **Clause violated**: §4c.2 — "active conventionally carries NO
-message" (citizenship-observatory-brief.md:282).
+message" (advisor-brief.md:282).
 
-**Implementation**: `_bad_citizenship_unit_status()` returns
+**Implementation**: `_bad_behavior_unit_status()` returns
 `ops.ActiveStatus(f"serving on port {port}")`.
 
-**Detected by**: v1 citizen Signal 1 (`active-with-message`, severity
+**Detected by**: v1 advisor Signal 1 (`active-with-message`, severity
 `info`, owner `charm-author`).
 
-**Recovery**: `juju config <app> bad-citizenship-mode=none`.
+**Recovery**: `juju config <app> bad-behavior-mode=none`.
 
 ### `blocked-no-message`
 
@@ -55,15 +55,15 @@ message" (citizenship-observatory-brief.md:282).
 message" (brief:275). The empty Info string here is deliberately
 un-actionable.
 
-**Implementation**: `_bad_citizenship_unit_status()` returns
+**Implementation**: `_bad_behavior_unit_status()` returns
 `ops.BlockedStatus("")`.
 
-**Detected by**: forward-looking detector candidate. v1 citizen does
+**Detected by**: forward-looking detector candidate. v1 advisor does
 not yet check this.
 
 **Observable in `juju status`**: `Workload: blocked`, `Message: (empty)`.
 
-**Recovery**: `juju config <app> bad-citizenship-mode=none`.
+**Recovery**: `juju config <app> bad-behavior-mode=none`.
 
 ### `stuck-maintenance`
 
@@ -71,16 +71,16 @@ not yet check this.
 long-running but **bounded** work. Holding it indefinitely is a
 misuse; operators have no signal that the charm is actually idle.
 
-**Implementation**: `_bad_citizenship_unit_status()` returns
+**Implementation**: `_bad_behavior_unit_status()` returns
 `ops.MaintenanceStatus("preparing calibration suite")` on every
 reconcile.
 
-**Detected by**: forward-looking. v1 citizen does not yet check this.
+**Detected by**: forward-looking. v1 advisor does not yet check this.
 
 **Observable in `juju status`**: `Workload: maintenance`, `Message:
 preparing calibration suite` (no progression).
 
-**Recovery**: `juju config <app> bad-citizenship-mode=none`.
+**Recovery**: `juju config <app> bad-behavior-mode=none`.
 
 ### `status-churn`
 
@@ -92,12 +92,12 @@ in succession see different states.
 between `ops.ActiveStatus()` and `ops.WaitingStatus("waiting for
 nothing in particular")`. Each reconcile flips the parity.
 
-**Detected by**: forward-looking. v1 citizen does not yet check this.
+**Detected by**: forward-looking. v1 advisor does not yet check this.
 
 **Observable in `juju status`**: alternating states across consecutive
 runs.
 
-**Recovery**: `juju config <app> bad-citizenship-mode=none`.
+**Recovery**: `juju config <app> bad-behavior-mode=none`.
 
 ### `hook-error`
 
@@ -108,7 +108,7 @@ exception interrupts the firing protocol and drives the unit to error.
 `RuntimeError` inside `_reconcile`, after the event-ledger entry has
 been written.
 
-**Detected by**: forward-looking. v1 citizen does not yet check this.
+**Detected by**: forward-looking. v1 advisor does not yet check this.
 
 **Observable in `juju status`**: `Workload: error`, `Agent: failed`.
 
@@ -118,7 +118,7 @@ been written.
 # 1. Change the config back to a non-crashing mode. The config-changed
 #    reconcile will also crash, but the config value is recorded BEFORE
 #    the reconcile fires, so the new value is persisted.
-juju config <app> bad-citizenship-mode=none
+juju config <app> bad-behavior-mode=none
 
 # 2. Tell Juju to retry the failed hook.
 juju resolve <unit>
@@ -135,12 +135,12 @@ unit on the relation and survives `juju show-unit` indefinitely.
 databag during `_update_relation_data`. Only fires when an integration
 is established on `calibration-provider`.
 
-**Detected by**: forward-looking. v1 citizen does not yet check this.
+**Detected by**: forward-looking. v1 advisor does not yet check this.
 
 **Observable**: `juju show-unit <unit>` exposes the keys under the
 relation's `application-data` section.
 
-**Recovery**: `juju config <app> bad-citizenship-mode=none` then
+**Recovery**: `juju config <app> bad-behavior-mode=none` then
 `juju refresh` or rebuild — the leader needs to overwrite the data on
 the next reconcile.
 
@@ -160,7 +160,7 @@ fails.
 are present). The unit's install/start/config-changed hooks complete
 normally — only teardown crashes.
 
-**Detected by**: `entity-stuck-dying` (juju citizen). Once the unit
+**Detected by**: `entity-stuck-dying` (juju advisor). Once the unit
 has been wedged for 5+ minutes in Life=Dying with agent=failed, the
 detector flags it as a warning.
 
@@ -174,7 +174,7 @@ departure hook never completes.
 ```bash
 # 1. Change the config back to a non-crashing mode so the retried
 #    teardown hook will succeed.
-juju config <app> bad-citizenship-mode=none
+juju config <app> bad-behavior-mode=none
 
 # 2. Tell Juju to retry the failed departure hook. The unit will
 #    progress from Dying to Dead.
@@ -187,7 +187,7 @@ juju remove-application <app>
 
 ## Multi-instance demo
 
-A canonical multi-instance demo deploys one good citizen plus four bad
+A canonical multi-instance demo deploys one compliant charm plus four bad
 ones in the same model:
 
 ```bash
@@ -197,16 +197,16 @@ CHARM=./juju-norma-k8s_amd64.charm
 RES="--resource juju-norma-image=localhost:32000/juju-norma:0.1.0"
 
 juju deploy $CHARM good        $RES --trust
-juju deploy $CHARM bad-active  $RES --trust --config bad-citizenship-mode=active-with-message
-juju deploy $CHARM bad-blocked $RES --trust --config bad-citizenship-mode=blocked-no-message
-juju deploy $CHARM bad-stuck   $RES --trust --config bad-citizenship-mode=stuck-maintenance
-juju deploy $CHARM bad-churn   $RES --trust --config bad-citizenship-mode=status-churn
+juju deploy $CHARM bad-active  $RES --trust --config bad-behavior-mode=active-with-message
+juju deploy $CHARM bad-blocked $RES --trust --config bad-behavior-mode=blocked-no-message
+juju deploy $CHARM bad-stuck   $RES --trust --config bad-behavior-mode=stuck-maintenance
+juju deploy $CHARM bad-churn   $RES --trust --config bad-behavior-mode=status-churn
 
 juju status
-juju citizen
+juju advisor
 ```
 
-Expected `juju citizen` output (current v1 detector set):
+Expected `juju advisor` output (current v1 detector set):
 
 - `bad-active/0` — INFO active-with-message finding.
 - All other instances — no findings (but their workload states are
@@ -216,14 +216,14 @@ Expected `juju citizen` output (current v1 detector set):
 ## Adding a new mode
 
 1. Choose the §4c clause being violated.
-2. Add the mode name to `BAD_CITIZENSHIP_MODES` in `src/charm.py`.
-3. Add a branch in `_bad_citizenship_unit_status()` (for status modes)
+2. Add the mode name to `BAD_BEHAVIOR_MODES` in `src/charm.py`.
+3. Add a branch in `_bad_behavior_unit_status()` (for status modes)
    or write a new helper for non-status modes and wire it where the
    misbehaviour belongs.
 4. Add a section above documenting the mode, the citation, the
    implementation, the detector status, the observable, and the
    recovery.
-5. Add an entry to the `bad-citizenship-mode` config description in
+5. Add an entry to the `bad-behavior-mode` config description in
    `charmcraft.yaml`.
 
 Keep `none` as the default in every change.

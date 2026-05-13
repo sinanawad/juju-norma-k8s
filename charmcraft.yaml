@@ -77,12 +77,12 @@ config:
     calibration-secret:
       type: secret
       description: Calibration secret config (tests secret URI resolution)
-    bad-citizenship-mode:
+    bad-behavior-mode:
       type: string
       default: "none"
       description: |
-        Simulate a specific bad-citizenship pattern for testing the Juju
-        Citizenship Observatory. The default 'none' preserves the
+        Simulate a specific bad-behavior pattern for testing the Juju
+        Advisor. The default 'none' preserves the
         charm's well-behaved baseline (used by its own CI). Other values
         deliberately misbehave so multiple instances of this charm can
         be deployed under different modes for observatory demos.
@@ -91,7 +91,7 @@ config:
           - none: well-behaved baseline (default).
           - active-with-message: emit ActiveStatus carrying a non-empty
             workload message. Violates §4c.2 ("active conventionally
-            carries no message"). Detected by v1 citizen Signal 1.
+            carries no message"). Detected by v1 advisor Signal 1.
           - blocked-no-message: emit BlockedStatus with empty Info.
             Violates §4c.2 ("blocked MUST carry an actionable message").
             Forward-looking detector candidate.
@@ -116,13 +116,13 @@ config:
             exception during `juju remove-application`. The unit stays
             in Life=Dying with agent=failed indefinitely. Violates
             §4c.1 (hooks must complete) during teardown. Detected by
-            the `entity-stuck-dying` citizen detector once the unit
+            the `entity-stuck-dying` advisor detector once the unit
             has been wedged for 5+ minutes. To recover: set this
             config back to 'none', run `juju resolve <unit>` to retry
             the failed teardown hook, then `juju remove-application
             <app>` should complete normally.
 
-        Any unrecognised value falls back to good-citizen behaviour
+        Any unrecognised value falls back to compliant behaviour
         with a stderr-logged warning.
 
 actions:
