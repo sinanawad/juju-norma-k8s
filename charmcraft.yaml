@@ -77,6 +77,53 @@ config:
     calibration-secret:
       type: secret
       description: Calibration secret config (tests secret URI resolution)
+    bad-citizenship-mode:
+      type: string
+      default: "none"
+      description: |
+        Simulate a specific bad-citizenship pattern for testing the Juju
+        Citizenship Observatory. The default 'none' preserves the
+        charm's well-behaved baseline (used by its own CI). Other values
+        deliberately misbehave so multiple instances of this charm can
+        be deployed under different modes for observatory demos.
+
+        Recognised values:
+          - none: well-behaved baseline (default).
+          - active-with-message: emit ActiveStatus carrying a non-empty
+            workload message. Violates §4c.2 ("active conventionally
+            carries no message"). Detected by v1 citizen Signal 1.
+          - blocked-no-message: emit BlockedStatus with empty Info.
+            Violates §4c.2 ("blocked MUST carry an actionable message").
+            Forward-looking detector candidate.
+          - stuck-maintenance: hold MaintenanceStatus indefinitely.
+            Violates the §4c.2 derivation that maintenance is for
+            long-running but bounded work. Forward-looking.
+          - status-churn: alternate workload status between active and
+            waiting on every reconcile. Violates §4c.2 stability.
+            Forward-looking.
+          - hook-error: raise an uncaught exception inside _reconcile,
+            driving the unit to error status. Violates §4c.1 (hooks
+            must complete). Forward-looking. To recover: set this
+            config back to 'none' and run `juju resolve <unit>`.
+          - secret-in-relation: leader writes a plaintext "password"
+            key into the calibration-provider relation databag.
+            Violates §4c.4 ("cryptographic material in plaintext
+            relation data" anti-pattern). Forward-looking, only visible
+            when an integration is established on calibration-provider.
+          - stuck-dying: the unit deploys cleanly (mode does NOT raise
+            during install/start), but the FIRST departure hook
+            (relation-broken, stop, or remove) raises an uncaught
+            exception during `juju remove-application`. The unit stays
+            in Life=Dying with agent=failed indefinitely. Violates
+            §4c.1 (hooks must complete) during teardown. Detected by
+            the `entity-stuck-dying` citizen detector once the unit
+            has been wedged for 5+ minutes. To recover: set this
+            config back to 'none', run `juju resolve <unit>` to retry
+            the failed teardown hook, then `juju remove-application
+            <app>` should complete normally.
+
+        Any unrecognised value falls back to good-citizen behaviour
+        with a stderr-logged warning.
 
 actions:
   get-event-log:

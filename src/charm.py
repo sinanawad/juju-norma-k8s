@@ -237,6 +237,12 @@ class NormaK8sCharm(ops.CharmBase):
 
         self._log_event(event_name, extra)
 
+        # Citizenship test-bed: raise an uncaught exception if the
+        # operator selected hook-error mode. Logged above so the
+        # event ledger records the attempt before the crash.
+        self._maybe_trigger_hook_error()
+        self._maybe_trigger_stuck_dying(event)
+
         # Identify the broken relation (if any) so grant logic skips it
         broken_relation: ops.Relation | None = None
         if (
@@ -364,9 +370,14 @@ class NormaK8sCharm(ops.CharmBase):
 
     def _on_stop(self, event: ops.StopEvent) -> None:
         self._log_event("stop")
+        # Citizenship test-bed: if stuck-dying mode is set, raise here so
+        # the unit wedges in Life=Dying even when no relations are present
+        # (otherwise relation-broken in _reconcile catches it first).
+        self._maybe_trigger_stuck_dying(event)
 
     def _on_remove(self, event: ops.RemoveEvent) -> None:
         self._log_event("remove")
+        self._maybe_trigger_stuck_dying(event)
 
     def _on_secret_rotate(self, event: ops.SecretRotateEvent) -> None:
         """Rotate the secret by creating a new revision with fresh content."""
@@ -397,6 +408,16 @@ class NormaK8sCharm(ops.CharmBase):
             event.add_status(ops.WaitingStatus("Waiting for Pebble"))
             return
 
+        # Citizenship test-bed dispatch: if the operator has selected a
+        # bad-citizenship-mode, emit the corresponding violating status
+        # instead of the well-behaved baseline. Default mode ('none')
+        # falls through to the empty ActiveStatus that good citizens
+        # emit (§4c.2: "active conventionally carries no message").
+        bad_status = self._bad_citizenship_unit_status()
+        if bad_status is not None:
+            event.add_status(bad_status)
+            return
+
         event.add_status(ops.ActiveStatus())
 
     def _on_collect_app_status(self, event: ops.CollectStatusEvent) -> None:
@@ -406,6 +427,151 @@ class NormaK8sCharm(ops.CharmBase):
             event.add_status(self._forced_status)
             return
         event.add_status(ops.ActiveStatus())
+
+    # ------------------------------------------------------------------ #
+    #  Citizenship test-bed                                               #
+    # ------------------------------------------------------------------ #
+
+    # Modes recognised by the bad-citizenship-mode config option. Any
+    # value outside this set falls back to good-citizen behaviour with
+    # a logged warning. Order is informational only.
+    BAD_CITIZENSHIP_MODES: tuple[str, ...] = (
+        "none",
+        "active-with-message",
+        "blocked-no-message",
+        "stuck-maintenance",
+        "status-churn",
+        "hook-error",
+        "secret-in-relation",
+        "stuck-dying",
+    )
+
+    def _bad_mode(self) -> str:
+        """Return the normalised bad-citizenship-mode config value.
+
+        Unknown values map to 'none' (good citizen) with a stderr log
+        line so the operator notices the typo.
+        """
+        raw = str(self.config.get("bad-citizenship-mode", "none") or "none").strip()
+        if raw not in self.BAD_CITIZENSHIP_MODES:
+            logger.warning(
+                "Unknown bad-citizenship-mode %r; falling back to 'none'. "
+                "Valid modes: %s",
+                raw,
+                ", ".join(self.BAD_CITIZENSHIP_MODES),
+            )
+            return "none"
+        return raw
+
+    def _bad_citizenship_unit_status(self) -> ops.StatusBase | None:
+        """Return a deliberately bad workload status for the active mode.
+
+        Returns None when the mode is 'none' or when the mode is a
+        non-status misbehavior (hook-error, secret-in-relation) — in
+        which case the caller falls through to the good-citizen path
+        (empty ActiveStatus).
+
+        Each non-None branch cites the §4c clause it violates.
+        """
+        mode = self._bad_mode()
+
+        if mode == "active-with-message":
+            # §4c.2 violation: active conventionally carries NO message.
+            # The "useful runtime value as message" anti-pattern is
+            # captured in the citizenship brief at line 282.
+            port = int(self.config.get("calibration-int", norma.DEFAULT_PORT))
+            return ops.ActiveStatus(f"serving on port {port}")
+
+        if mode == "blocked-no-message":
+            # §4c.2 violation: blocked MUST carry an actionable message
+            # (brief line 275). The empty string here is deliberately
+            # un-actionable -- operators have no remediation cue.
+            return ops.BlockedStatus("")
+
+        if mode == "stuck-maintenance":
+            # §4c.2 derivation: maintenance is for long-running but
+            # bounded work. Holding it indefinitely is a misuse --
+            # operators have no signal that the charm is actually idle.
+            return ops.MaintenanceStatus("preparing calibration suite")
+
+        if mode == "status-churn":
+            # §4c.2 violation: stability of declared state. The ledger
+            # length acts as a free counter -- even counts emit Active,
+            # odd counts emit Waiting. Each reconcile flips the parity.
+            if len(self._event_ledger) % 2 == 0:
+                return ops.ActiveStatus()
+            return ops.WaitingStatus("waiting for nothing in particular")
+
+        # hook-error and secret-in-relation don't override unit status;
+        # they affect the reconcile/relation paths. Fall through to the
+        # good-citizen empty ActiveStatus so the unit remains in a
+        # known state until the actual misbehavior fires.
+        return None
+
+    def _maybe_trigger_hook_error(self) -> None:
+        """Raise an uncaught exception if bad-citizenship-mode == hook-error.
+
+        Call this from _reconcile AFTER event logging so the ledger
+        records the attempt. The raised exception propagates out of
+        the reconcile -- Juju marks the unit as 'error' and stops
+        invoking hooks until `juju resolve` is run.
+
+        Recovery: set bad-citizenship-mode back to 'none' (config-changed
+        will also raise, but the config write succeeds first), then
+        run `juju resolve <unit>` to retry.
+        """
+        if self._bad_mode() == "hook-error":
+            # §4c.1 violation: hooks must complete. Uncaught exceptions
+            # interrupt the firing protocol and drive the unit to error.
+            raise RuntimeError(
+                "bad-citizenship-mode=hook-error: simulated uncaught "
+                "exception per §4c.1 violation pattern"
+            )
+
+    def _maybe_trigger_stuck_dying(self, event: ops.EventBase) -> None:
+        """Raise during teardown events if mode == stuck-dying.
+
+        Distinct from hook-error which raises on every event. Stuck-dying
+        raises ONLY on departure events so the unit deploys cleanly first
+        and only wedges during 'juju remove-application'. Result: unit
+        stays in Life=Dying after the first failed teardown hook.
+
+        Recovery requires both flipping bad-citizenship-mode back to 'none'
+        and running 'juju resolve <unit>' to retry the teardown.
+        """
+        if self._bad_mode() != "stuck-dying":
+            return
+        if isinstance(event, (
+            ops.StopEvent,
+            ops.RemoveEvent,
+            ops.RelationBrokenEvent,
+            ops.RelationDepartedEvent,
+        )):
+            raise RuntimeError(
+                "bad-citizenship-mode=stuck-dying: simulated teardown "
+                "failure per §4c.1 hook firing protocol"
+            )
+
+    def _inject_bad_relation_data(self, broken_relation: ops.Relation | None) -> None:
+        """If bad-citizenship-mode == secret-in-relation, write plaintext
+        cryptographic-looking material into the calibration-provider
+        relation databag from the leader.
+
+        Call this from _update_relation_data on the leader, after the
+        legitimate relation data has been written.
+        """
+        if self._bad_mode() != "secret-in-relation":
+            return
+        if not self.unit.is_leader():
+            return
+        # §4c.4 violation: relations are a public databag; plaintext
+        # credentials there are accessible to any unit on the relation
+        # and survive `juju show-unit` indefinitely.
+        for rel in self.model.relations.get("calibration-provider", []):
+            if rel == broken_relation:
+                continue
+            rel.data[self.app]["password"] = "hunter2"
+            rel.data[self.app]["api-key"] = "AKIAIOSFODNN7EXAMPLE"
 
     # ------------------------------------------------------------------ #
     #  Actions                                                            #
@@ -1221,6 +1387,11 @@ class NormaK8sCharm(ops.CharmBase):
                 existing_cal = rel.data[self.unit]
                 if any(existing_cal.get(k) != v for k, v in cal_data.items()):
                     existing_cal.update(cal_data)
+
+        # Citizenship test-bed: optionally poison the relation databag
+        # with plaintext "credentials" so a future detector can spot
+        # the §4c.4 anti-pattern.
+        self._inject_bad_relation_data(broken_relation)
 
     def _get_charm_version(self) -> str:
         """Read charm version from the version file written by charmcraft."""
