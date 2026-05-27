@@ -1,0 +1,135 @@
+name: Publish ROCK
+
+# Builds the chiselled OCI image (ROCK) for both amd64 and arm64,
+# pushes each architecture under a per-arch tag, then assembles a
+# multi-arch manifest list so consumers can pull a single image
+# reference that resolves to the correct platform.
+#
+# Tags produced:
+#   - push to main           : ghcr.io/<owner>/juju-norma:latest
+#                              ghcr.io/<owner>/juju-norma:main-<short-sha>
+#   - tag v<version>         : ghcr.io/<owner>/juju-norma:<version>
+#                              ghcr.io/<owner>/juju-norma:latest
+#
+# The per-arch tags (:<base>-amd64, :<base>-arm64) are kept after the
+# manifest list is created so a future regen can re-reference them
+# without rebuilding.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/juju-norma
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build ROCK (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read ROCK version
+        id: meta
+        run: |
+          version=$(awk '/^version:/ {gsub(/"/, "", $2); print $2}' rockcraft.yaml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building version: $version (arch: ${{ matrix.arch }})"
+
+      - name: Setup LXD
+        uses: canonical/setup-lxd@main
+
+      - name: Install rockcraft
+        run: sudo snap install rockcraft --classic
+
+      - name: Pack ROCK
+        run: rockcraft pack --platform ${{ matrix.arch }}
+
+      - name: Log in to ghcr.io
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            rockcraft.skopeo login --username "${{ github.actor }}" \
+            --password-stdin "$REGISTRY"
+
+      - name: Determine tag base
+        id: tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            base="${GITHUB_REF#refs/tags/v}"
+          else
+            base="main-$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "Base tag: $base"
+
+      - name: Push per-arch ROCK
+        run: |
+          ROCK_FILE=$(ls *.rock | head -1)
+          rockcraft.skopeo --insecure-policy copy \
+            "oci-archive:${ROCK_FILE}" \
+            "docker://${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-${{ matrix.arch }}"
+
+  manifest:
+    name: Assemble multi-arch manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Determine tag base
+        id: tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            base="${GITHUB_REF#refs/tags/v}"
+            extra_tag="latest"
+          else
+            base="main-$(echo "$GITHUB_SHA" | cut -c1-7)"
+            extra_tag="latest"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "extra_tag=$extra_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create + push manifest list (${{ steps.tag.outputs.base }})
+        run: |
+          docker buildx imagetools create \
+            --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
+            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-amd64" \
+            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-arm64"
+
+      - name: Tag as ${{ steps.tag.outputs.extra_tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.extra_tag }}" \
+            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-amd64" \
+            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-arm64"
+
+      - name: Verify multi-arch manifest
+        run: |
+          docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
+            | tee inspect.txt
+          grep -q "linux/amd64" inspect.txt
+          grep -q "linux/arm64" inspect.txt
+          echo "Multi-arch manifest verified: amd64 + arm64 present"

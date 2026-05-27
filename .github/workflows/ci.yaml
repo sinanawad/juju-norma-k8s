@@ -89,12 +89,18 @@ jobs:
     name: Integration (${{ matrix.juju-channel }})
     runs-on: ubuntu-24.04
     needs: [unit, pack, build-rock]
+    # Integration is workflow_dispatch-only for now — the suite runs
+    # ~10 min on Juju 3.6 and ~50 min on Juju 4.0 against a fresh
+    # microk8s controller, which is too expensive for every PR. To
+    # opt into per-PR integration later, switch this gate to also
+    # accept pull_request events and split tests with pytest markers
+    # (e.g., -m smoke for a subset).
     if: github.event_name == 'workflow_dispatch'
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        juju-channel: ["3.6/stable"]
+        juju-channel: ["3.6/stable", "4.0/stable"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -116,12 +122,14 @@ jobs:
       - name: Push ROCK to local registry
         run: |
           sudo snap install rockcraft --classic
+          version=$(awk '/^version:/ {gsub(/"/, "", $2); print $2}' rockcraft.yaml)
           rockcraft.skopeo --insecure-policy copy \
             oci-archive:$(ls *.rock) \
-            docker://localhost:32000/juju-norma:0.1.0 \
+            "docker://localhost:32000/juju-norma:${version}" \
             --dest-tls-verify=false
+          echo "NORMA_IMAGE=localhost:32000/juju-norma:${version}" >> "$GITHUB_ENV"
       - run: make integration
-        timeout-minutes: 25
+        timeout-minutes: 80
         env:
           SETUP_ENVIRONMENT: "1"
           JUJU_CHANNEL: ${{ matrix.juju-channel }}
