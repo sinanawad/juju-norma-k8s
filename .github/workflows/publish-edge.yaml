@@ -18,7 +18,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # canonical/charming-actions/upload-charm pushes a git tag
+                    # ("rev<N>-<sha>") for each new charm revision; without
+                    # write the action fails with "Resource not accessible".
 
 jobs:
   publish:
