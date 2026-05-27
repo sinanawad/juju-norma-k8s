@@ -23,9 +23,17 @@ services:
 
 parts:
   busybox:
+    # Vendor the busybox-static binary directly instead of using the
+    # `busybox_bins` chisel slice. Chisel's slice manifest is pinned
+    # to a specific Ubuntu archive snapshot and the GitHub-hosted
+    # runner's mirror tends to drift past that snapshot, breaking the
+    # build with a digest mismatch. `build-packages` uses normal apt
+    # in the build VM (no digest pinning), which is mirror-tolerant.
     plugin: nil
-    stage-packages:
-      - busybox_bins
+    build-packages:
+      - busybox-static
+    override-build: |
+      install -D -m 0755 /bin/busybox "${CRAFT_PART_INSTALL}/usr/bin/busybox"
     override-prime: |
       craftctl default
       # Create /bin/sh symlink for juju exec/ssh shell support (FR-038)
