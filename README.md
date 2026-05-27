@@ -1,5 +1,11 @@
 # juju-norma-k8s
 
+[![CharmHub](https://charmhub.io/juju-norma-k8s/badge.svg)](https://charmhub.io/juju-norma-k8s)
+[![CI](https://github.com/sinanawad/juju-norma-k8s/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/sinanawad/juju-norma-k8s/actions/workflows/ci.yaml)
+[![Publish to latest/edge](https://github.com/sinanawad/juju-norma-k8s/actions/workflows/publish-edge.yaml/badge.svg?branch=main)](https://github.com/sinanawad/juju-norma-k8s/actions/workflows/publish-edge.yaml)
+[![Juju 3.6 / 4.0](https://img.shields.io/badge/juju-3.6%20%7C%204.0-blue)](https://juju.is)
+[![License](https://img.shields.io/github/license/sinanawad/juju-norma-k8s)](LICENSE)
+
 A comprehensive **Juju K8s calibration charm** that exercises every feature and capability relevant to Kubernetes charms. Designed as a self-sufficient CI validation suite for Juju itself, this single charm can replace all existing K8s sidecar test charms.
 
 This repository also serves as a **reference implementation** for building Juju K8s charms. See [Reference Documentation](#reference-documentation) below.
