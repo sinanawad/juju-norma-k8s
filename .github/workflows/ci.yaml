@@ -32,7 +32,7 @@ jobs:
       - run: make unit
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: .coverage
@@ -62,7 +62,7 @@ jobs:
           rm charmcraft-principal.yaml.bak
           mv principal.charm juju-norma-k8s_amd64.charm
       - name: Upload charm artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: charm
           path: "*.charm"
@@ -80,7 +80,7 @@ jobs:
       - name: Build ROCK (amd64 only)
         run: rockcraft pack --platform amd64
       - name: Upload ROCK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rock
           path: "*.rock"

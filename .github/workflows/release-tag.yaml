@@ -69,7 +69,7 @@ jobs:
           mv charmcraft-principal.yaml.bak charmcraft.yaml
 
       - name: Upload sudoer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sudoer-charm
           path: juju-norma-k8s-sudoer_amd64.charm
