@@ -1,8 +1,18 @@
-name: ROCK
+name: Workload Tests
+
+# Go tests on the Norma workload binary. Triggers only when the
+# workload or its packaging file changes — the rest of the repo
+# doesn't affect the binary.
+#
+# Note: ROCK packing happens in publish-rock.yaml (on main + tag,
+# multi-arch, pushes to ghcr.io) and in ci.yaml's build-rock job
+# (on every PR, single-arch, uploaded as an artifact for the
+# integration job). This file used to also pack a ROCK as an
+# artifact-only job — that was redundant and has been removed.
 
 on:
   push:
-    branches: [main, "001-*"]
+    branches: [main]
     paths:
       - "workload/**"
       - "rockcraft.yaml"
@@ -28,20 +38,3 @@ jobs:
       - name: Test
         working-directory: workload
         run: go test -v ./...
-
-  rock-pack:
-    name: Pack ROCK
-    runs-on: ubuntu-24.04
-    needs: go-test
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup LXD
-        uses: canonical/setup-lxd@main
-      - name: Install rockcraft
-        run: sudo snap install rockcraft --classic
-      - run: rockcraft pack
-      - name: Upload ROCK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rock
-          path: "*.rock"

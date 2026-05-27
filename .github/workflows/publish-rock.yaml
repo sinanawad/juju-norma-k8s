@@ -19,6 +19,18 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # The .charm artifact does not bundle README/docs/specs/scripts —
+    # changes to those files don't alter what consumers deploy. Skip
+    # the ROCK rebuild + downstream publish-edge cascade for docs-only
+    # commits to save CI time and avoid spurious revision-number churn
+    # on CharmHub. Tag pushes still build regardless (a tag implies
+    # an intentional release artifact).
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "specs/**"
+      - "scripts/**"
+      - "**.md"
   workflow_dispatch:
 
 env:
