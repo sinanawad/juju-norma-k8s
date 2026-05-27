@@ -1,0 +1,55 @@
+name: Promote charm channel
+
+# Manual channel promotion — typically used to ship a vetted candidate
+# revision to stable, but accepts any from/to combination.
+#
+# How to invoke: GitHub UI -> Actions -> "Promote charm channel" ->
+# "Run workflow" button (top right). Pick from_channel and to_channel
+# from the dropdowns. The workflow runs `charmcraft promote` server-side
+# using CHARMHUB_TOKEN — no local charmcraft login required.
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_channel:
+        description: Source channel
+        required: true
+        type: choice
+        default: latest/candidate
+        options:
+          - latest/edge
+          - latest/candidate
+      to_channel:
+        description: Target channel
+        required: true
+        type: choice
+        default: latest/stable
+        options:
+          - latest/candidate
+          - latest/stable
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.from_channel }} -> ${{ inputs.to_channel }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: charmcraft promote
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
+        run: |
+          # Refuse same-channel promotions — likely a misclick.
+          if [[ "${{ inputs.from_channel }}" == "${{ inputs.to_channel }}" ]]; then
+            echo "ERROR: from_channel and to_channel must differ"
+            exit 1
+          fi
+          charmcraft promote \
+            --name=juju-norma-k8s \
+            --from-channel=${{ inputs.from_channel }} \
+            --to-channel=${{ inputs.to_channel }} \
+            --yes

@@ -1,0 +1,113 @@
+name: Release (tag)
+
+# On a git tag `v*`:
+#   1. Promote the revision currently on latest/edge to latest/candidate.
+#      The promotion preserves the revision number and attached resources,
+#      so the exact bits already validated on edge flow to candidate.
+#   2. Build the sudoer variant (.charm) for the GitHub Release. Sudoer
+#      is never published to CharmHub per the hybrid distribution model.
+#   3. Download the principal charm from latest/candidate (the artifact
+#      that just got promoted), so the GH Release attaches the canonical
+#      .charm — byte-identical to what CharmHub serves.
+#   4. Create a GitHub Release with principal + sudoer .charm files
+#      attached.
+#
+# The ROCK is published separately by publish-rock.yaml (same trigger).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # for the GitHub Release
+
+jobs:
+  promote-to-candidate:
+    name: Promote latest/edge -> latest/candidate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: charmcraft promote edge -> candidate
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
+        run: |
+          charmcraft promote \
+            --name=juju-norma-k8s \
+            --from-channel=latest/edge \
+            --to-channel=latest/candidate \
+            --yes
+
+  build-sudoer:
+    name: Pack sudoer variant
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup LXD
+        uses: canonical/setup-lxd@main
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Fetch charm libs
+        run: charmcraft fetch-libs
+
+      - name: Pack with sudoer overlay
+        run: |
+          # Swap in the sudoer charmcraft.yaml overlay, pack, restore.
+          cp charmcraft.yaml charmcraft-principal.yaml.bak
+          cp charmcraft-sudoer.yaml charmcraft.yaml
+          charmcraft pack -v
+          sudoer=$(ls juju-norma-k8s_*.charm | head -1)
+          mv "$sudoer" juju-norma-k8s-sudoer_amd64.charm
+          mv charmcraft-principal.yaml.bak charmcraft.yaml
+
+      - name: Upload sudoer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sudoer-charm
+          path: juju-norma-k8s-sudoer_amd64.charm
+          if-no-files-found: error
+
+  github-release:
+    name: Create GitHub Release
+    needs: [promote-to-candidate, build-sudoer]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Download principal .charm from latest/candidate
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
+        run: |
+          # `charmcraft download` writes the canonical artifact that
+          # CharmHub serves on this channel — byte-identical to what
+          # users will pull via `juju deploy --channel=latest/candidate`.
+          charmcraft download juju-norma-k8s --channel=latest/candidate
+          # Normalize the filename to match the convention of older runs.
+          downloaded=$(ls juju-norma-k8s_*.charm | head -1)
+          mv "$downloaded" juju-norma-k8s_amd64.charm
+
+      - name: Download sudoer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sudoer-charm
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            juju-norma-k8s_amd64.charm \
+            juju-norma-k8s-sudoer_amd64.charm

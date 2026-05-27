@@ -1,0 +1,54 @@
+name: Publish to latest/edge
+
+# Continuous publish: every successful push to main produces a fresh
+# revision on latest/edge so consumers (notably Juju CI) always have
+# the bleeding edge. Promotion to higher risk levels (candidate, stable)
+# happens via release-tag.yaml (on git tags) or promote.yaml (manual).
+#
+# Chained via workflow_run so the ROCK on ghcr.io is fresh before the
+# charm's OCI resource is attached. If publish-rock fails on a commit,
+# this workflow does not run for that commit — preventing a charm
+# revision pointing at a stale OCI image.
+
+on:
+  workflow_run:
+    workflows: ["Publish ROCK"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish principal charm to latest/edge
+    runs-on: ubuntu-24.04
+    # Only on workflow_run success, or any workflow_dispatch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # charm `version` part needs git history
+
+      - name: Setup LXD
+        uses: canonical/setup-lxd@main
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Fetch charm libs
+        run: charmcraft fetch-libs
+
+      - name: Pack principal charm
+        run: charmcraft pack -v
+
+      - name: Upload + release to latest/edge
+        uses: canonical/charming-actions/upload-charm@2.7.0
+        with:
+          credentials: ${{ secrets.CHARMHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          channel: latest/edge
+          built-charm-path: juju-norma-k8s_amd64.charm
