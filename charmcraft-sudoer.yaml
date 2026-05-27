@@ -1,3 +1,9 @@
+# CI-ONLY BUILD ARTIFACT — DO NOT PUBLISH TO CHARMHUB.
+# Distribution: attached to GitHub Releases only (alongside the principal
+# .charm). The principal variant (charmcraft.yaml) is the one that goes to
+# CharmHub. This file exists solely to validate Juju's `charm-user: sudoer`
+# privilege mode (FR-031) — see specs/001-calibration-charm/plan.md.
+
 type: charm
 name: juju-norma-k8s
 title: Norma Calibration (Sudoer)
@@ -6,7 +12,7 @@ description: |
   Sudoer variant of the norma-k8s calibration charm, built from the same
   source with a different charmcraft overlay. Uses charm-user: sudoer instead
   of non-root to validate Juju's sudoer privilege mode for K8s charms.
-  Used by CI to test all privilege levels.
+  Used by CI to test all privilege levels. Never published to CharmHub.
 
 base: ubuntu@24.04
 platforms:

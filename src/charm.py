@@ -455,8 +455,7 @@ class NormaK8sCharm(ops.CharmBase):
         raw = str(self.config.get("bad-behavior-mode", "none") or "none").strip()
         if raw not in self.BAD_BEHAVIOR_MODES:
             logger.warning(
-                "Unknown bad-behavior-mode %r; falling back to 'none'. "
-                "Valid modes: %s",
+                "Unknown bad-behavior-mode %r; falling back to 'none'. Valid modes: %s",
                 raw,
                 ", ".join(self.BAD_BEHAVIOR_MODES),
             )
@@ -541,12 +540,15 @@ class NormaK8sCharm(ops.CharmBase):
         """
         if self._bad_mode() != "stuck-dying":
             return
-        if isinstance(event, (
-            ops.StopEvent,
-            ops.RemoveEvent,
-            ops.RelationBrokenEvent,
-            ops.RelationDepartedEvent,
-        )):
+        if isinstance(
+            event,
+            (
+                ops.StopEvent,
+                ops.RemoveEvent,
+                ops.RelationBrokenEvent,
+                ops.RelationDepartedEvent,
+            ),
+        ):
             raise RuntimeError(
                 "bad-behavior-mode=stuck-dying: simulated teardown "
                 "failure per §4c.1 hook firing protocol"
