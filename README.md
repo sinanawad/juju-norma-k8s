@@ -3,7 +3,7 @@
 A comprehensive **Juju K8s calibration charm** that exercises every feature and capability relevant to Kubernetes charms. Designed as a self-sufficient CI validation suite for Juju itself, this single charm can replace all existing K8s sidecar test charms.
 
 This repository also serves as a **reference implementation** for building Juju K8s charms. See [Reference Documentation](#reference-documentation) below.
-
+<iframe src="https://charmhub.io/juju-norma-k8s/embedded?button=black&channels=true&summary=true&base=true" frameborder="0" width="100%" height="500px" style="border: 1px solid #CCC; border-radius: 2px;"></iframe>
 ## What is this?
 
 `juju-norma-k8s` is not a production workload charm. It is a **test harness** — a purpose-built charm that systematically exercises all 25 Juju K8s features so that Juju's own CI can verify nothing is broken. Every feature is independently testable via dedicated actions, making it trivial to isolate regressions.
