@@ -26,6 +26,7 @@ workload/norma
 # IDE
 .vscode/
 .idea/
+.omc/
 
 # OS
 .DS_Store

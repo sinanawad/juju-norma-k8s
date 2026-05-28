@@ -8,7 +8,8 @@
 
 A comprehensive **Juju K8s calibration charm** that exercises every feature and capability relevant to Kubernetes charms. Designed as a self-sufficient CI validation suite for Juju itself, this single charm can replace all existing K8s sidecar test charms.
 
-This repository also serves as a **reference implementation** for building Juju K8s charms. See [Reference Documentation](#reference-documentation) below.
+This repository also serves as a **reference implementation** for building Juju K8s charms. See [For AI Agents](#for-ai-agents-building-a-new-charm-from-this-reference) and [Reference Documentation](#reference-documentation) below.
+
 ## What is this?
 
 `juju-norma-k8s` is not a production workload charm. It is a **test harness** — a purpose-built charm that systematically exercises all 25 Juju K8s features so that Juju's own CI can verify nothing is broken. Every feature is independently testable via dedicated actions, making it trivial to isolate regressions.
@@ -16,6 +17,29 @@ This repository also serves as a **reference implementation** for building Juju 
 The charm bundles a minimal Go HTTP server (the "Norma" binary) as its workload, managed via Pebble inside a chiselled (distroless) ROCK image.
 
 It is also a **canonical example** of how to build a production-quality Juju K8s charm — demonstrating the holistic reconciler pattern, two-module separation, non-root security, COS observability, and three-tier testing (unit/integration/CLI acceptance).
+
+## For AI Agents: Building a New Charm From This Reference
+
+If you were pointed at this repo to **build a new K8s charm "using these best
+practices and scaffolding style"**, optimize for **precision over speed**.
+Read these in order *before writing any code*:
+
+1. **[Architecture & Design](docs/architecture-and-design.md)** — the
+   architectural model and the *why* behind each practice. **Read §E first.**
+2. **[Scaffold](docs/reference/scaffold.md)** — build the skeleton from zero.
+3. **[Patterns](docs/reference/patterns.md)** — annotated, copy-ready code per feature.
+4. **[Pitfalls](docs/reference/pitfalls.md)** — verify before you ship.
+
+> ⚠️ **Do not copy `src/charm.py` wholesale.** This is a *calibration/test
+> harness*: it deliberately embeds **anti-patterns** (gated behind
+> `bad-behavior-mode` and a `event.defer()` test-gate) and intentionally **omits
+> TLS and profiling** as documented justified exceptions. Those parts are
+> *counter-examples*, not templates. The compliant baseline to emulate is:
+> `bad-behavior-mode=none`, events routed straight to `_reconcile()`, and
+> `ActiveStatus()` with **no** message. The full, challengeable list of
+> deviations is in
+> [Architecture & Design §E](docs/architecture-and-design.md#e-this-implementations-exceptions-and-how-to-challenge-them).
+> When in doubt, the constitution (`.specify/memory/constitution.md`) is normative.
 
 ## Capabilities
 
@@ -243,12 +267,22 @@ JUJU_MODEL=my-model make integration
 | **Principal** (default) | `charmcraft.yaml` | Primary charm with `charm-user: non-root` |
 | **Sudoer** | `charmcraft-sudoer.yaml` | CI-only variant with `charm-user: sudoer` privilege mode |
 
-## Reference Documentation
+## Using This Charm
 
-This repo doubles as a reference implementation for building Juju K8s charms. The `docs/reference/` directory contains four guides designed for both humans and AI agents building new charms:
+Guides for *deploying and driving* this charm (as opposed to building your own):
 
 | Document | What it answers |
 |----------|----------------|
+| [**Agent Usage Guide**](docs/agent-usage-guide.md) | How do I deploy and exercise this charm without hallucinating? Exact `juju` CLI commands, every action with its parameters and result keys, version-specific gotchas. Written for AI coding agents. |
+| [**Behavior Modes**](docs/BEHAVIOR-MODES.md) | What does each `bad-behavior-mode` do? The test-bed reference for simulating misbehaving charms. |
+
+## Reference Documentation
+
+This repo doubles as a reference implementation for building Juju K8s charms. The architecture overview plus the `docs/reference/` directory provide five guides designed for both humans and AI agents building new charms:
+
+| Document | What it answers |
+|----------|----------------|
+| [**Architecture & Design**](docs/architecture-and-design.md) | Why is the charm built this way? The architectural mental model and the reasoning behind each best practice, with citations to upstream docs. **Start here**, then dive into the how-to guides below. |
 | [**Charm Anatomy**](docs/reference/charm-anatomy.md) | What files do I need and what goes in each? File-by-file walkthrough of the entire repo. |
 | [**Patterns**](docs/reference/patterns.md) | Show me the code for implementing feature X. 18 patterns with annotated code extracted from this repo: reconciler, Pebble, config, relations, storage, actions, secrets, status, observability, security, testing. |
 | [**Scaffold**](docs/reference/scaffold.md) | How do I start from zero? Minimal viable charm, then a decision matrix and step-by-step guides for adding each feature. |
