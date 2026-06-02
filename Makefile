@@ -1,4 +1,4 @@
-.PHONY: lint fmt unit integration integration-setup clean
+.PHONY: lint fmt unit integration integration-smoke integration-setup clean
 
 lint:
 	uv run ruff check src/ tests/
@@ -14,6 +14,9 @@ unit:
 
 integration:
 	uv run pytest tests/integration -v --tb=short
+
+integration-smoke:
+	uv run pytest tests/integration -v --tb=short -m smoke
 
 integration-setup:
 	SETUP_ENVIRONMENT=1 uv run pytest tests/integration -v --tb=short

@@ -3,6 +3,7 @@
 import json
 
 import jubilant
+import pytest
 
 APP = "juju-norma-k8s"
 PEER_APP = "juju-norma-k8s-peer"
@@ -11,6 +12,7 @@ PEER_APP = "juju-norma-k8s-peer"
 class TestPeerRelation:
     """US6: Peer relation data exchange."""
 
+    @pytest.mark.smoke
     def test_get_peer_data_returns_structure(self, juju: jubilant.Juju):
         task = juju.run(f"{APP}/leader", "get-peer-data")
         assert task.success

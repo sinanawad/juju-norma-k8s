@@ -5,6 +5,9 @@ on:
     branches: [main, "001-*"]
   pull_request:
     branches: [main]
+  schedule:
+    # Nightly full integration matrix (3.6/stable, 4.0/stable, 4.0/edge).
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 jobs:
@@ -85,22 +88,35 @@ jobs:
           name: rock
           path: "*.rock"
 
-  integration:
-    name: Integration (${{ matrix.juju-channel }})
+  # Decide the integration matrix from the triggering event:
+  #   - pull_request / push        -> fast smoke subset on Juju 4.0/edge
+  #                                    (the engine-under-test: regressions land
+  #                                    in edge first). ~one deploy + a handful of
+  #                                    quick assertions.
+  #   - schedule / workflow_dispatch -> full 18-suite matrix across
+  #                                    3.6/stable, 4.0/stable, 4.0/edge.
+  integration-matrix:
+    name: Decide integration matrix
     runs-on: ubuntu-24.04
-    needs: [unit, pack, build-rock]
-    # Integration is workflow_dispatch-only for now — the suite runs
-    # ~10 min on Juju 3.6 and ~50 min on Juju 4.0 against a fresh
-    # microk8s controller, which is too expensive for every PR. To
-    # opt into per-PR integration later, switch this gate to also
-    # accept pull_request events and split tests with pytest markers
-    # (e.g., -m smoke for a subset).
-    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo 'matrix={"include":[{"channel":"3.6/stable","mode":"full"},{"channel":"4.0/stable","mode":"full"},{"channel":"4.0/edge","mode":"full"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"channel":"4.0/edge","mode":"smoke"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
+  integration:
+    name: Integration (${{ matrix.channel }} ${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    needs: [unit, pack, build-rock, integration-matrix]
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        juju-channel: ["3.6/stable", "4.0/stable"]
+      matrix: ${{ fromJSON(needs.integration-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -128,10 +144,15 @@ jobs:
             "docker://localhost:32000/juju-norma:${version}" \
             --dest-tls-verify=false
           echo "NORMA_IMAGE=localhost:32000/juju-norma:${version}" >> "$GITHUB_ENV"
-      - run: make integration
+      # `make integration-smoke` (-m smoke) for the fast PR/push subset;
+      # `make integration` for the full nightly/dispatch matrix. JUJU_CHANNEL
+      # drives BOTH the juju client snap AND the bootstrapped controller image
+      # (via setup_env), so `4.0/edge` here means an edge controller too.
+      - name: Run integration (${{ matrix.mode }})
+        run: make integration${{ matrix.mode == 'smoke' && '-smoke' || '' }}
         timeout-minutes: 80
         env:
           SETUP_ENVIRONMENT: "1"
-          JUJU_CHANNEL: ${{ matrix.juju-channel }}
+          JUJU_CHANNEL: ${{ matrix.channel }}
           CHARM_PATH: ${{ github.workspace }}
 

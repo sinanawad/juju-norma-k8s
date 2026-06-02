@@ -35,3 +35,6 @@ show_missing = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "lib"]
+markers = [
+    "smoke: minimal fast integration subset run on PRs/pushes (deploy+active, lifecycle events, one config change, one peer-relation read).",
+]
