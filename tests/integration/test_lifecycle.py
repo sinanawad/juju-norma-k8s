@@ -10,6 +10,7 @@ import pytest
 APP = "juju-norma-k8s"
 
 
+@pytest.mark.smoke
 class TestLifecycle:
     """US1: Charm starts, reaches active, records lifecycle events."""
 

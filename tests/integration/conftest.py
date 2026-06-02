@@ -56,8 +56,12 @@ def pytest_addoption(parser):
 APP = "juju-norma-k8s"
 CHARM_FILE_GLOB = "*norma-k8s_*.charm"
 OCI_IMAGE_DEFAULT = "ghcr.io/sinanawad/juju-norma:latest"
+# setup_env._register_microk8s_cloud registers the k8s cloud as "mk8s" (the
+# built-in "microk8s" name is reserved), and bootstraps on it. Keep the default
+# here in sync so the FRESH_CONTROLLER and JUJU_CLI add-model paths reference the
+# SAME cloud the controller was bootstrapped on.
 CONTROLLER_DEFAULT = "microk8s-localhost"
-CLOUD_DEFAULT = "microk8s"
+CLOUD_DEFAULT = "mk8s"
 RESOURCE_NAME = "juju-norma-image"
 DEPLOY_RETRIES = 3
 DEPLOY_RETRY_DELAY = 5  # seconds
@@ -202,8 +206,8 @@ def juju(environment_ready, charm_path, oci_image):
     """
     model = _env("JUJU_MODEL")
     cli = _env("JUJU_CLI")
-    controller = _env("JUJU_CONTROLLER", "microk8s-localhost")
-    cloud = _env("JUJU_CLOUD", "microk8s")
+    controller = _env("JUJU_CONTROLLER", CONTROLLER_DEFAULT)
+    cloud = _env("JUJU_CLOUD", CLOUD_DEFAULT)
     keep = _env("KEEP_MODEL") == "1"
 
     if model:

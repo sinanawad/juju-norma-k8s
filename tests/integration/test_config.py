@@ -18,6 +18,7 @@ class TestConfiguration:
         assert task.results["calibration-int"] == "8080"
         assert task.results["calibration-bool"] == "True"
 
+    @pytest.mark.smoke
     def test_set_string_config(self, juju: jubilant.Juju):
         juju.config(APP, {"calibration-string": "integration-test"})
         juju.wait(jubilant.all_active, timeout=60)

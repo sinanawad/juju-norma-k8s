@@ -36,16 +36,52 @@ def is_snap_installed(name: str) -> bool:
     return result.returncode == 0
 
 
+def tracked_channel(name: str) -> str:
+    """Return the channel a snap is tracking, or "" if not installed.
+
+    ``snap list`` columns are: Name Version Rev Tracking Publisher Notes.
+    """
+    result = _run(["snap", "list", name], check=False)
+    if result.returncode != 0:
+        return ""
+    lines = result.stdout.strip().splitlines()
+    if len(lines) < 2:
+        return ""
+    fields = lines[1].split()
+    return fields[3] if len(fields) >= 4 else ""
+
+
 def install_snap(name: str, channel: str, *, classic: bool = True) -> None:
-    """Install a snap if it is not already present."""
+    """Install (or refresh) a snap so it tracks the requested *channel*.
+
+    Presence alone is insufficient: a snap already installed from another
+    channel must be refreshed, or the requested channel is silently ignored
+    (e.g. an "edge engine-under-test" run would quietly execute as stale
+    stable).  After the operation the tracked channel is asserted to match,
+    so a channel mismatch (or a refresh snapd refuses, e.g. a downgrade
+    across tracks) fails loudly instead of running the wrong engine.
+    """
     if is_snap_installed(name):
-        logger.info("snap %s already installed", name)
-        return
-    cmd = ["sudo", "snap", "install", name, "--channel", channel]
-    if classic:
-        cmd.append("--classic")
-    _run(cmd, timeout=SNAP_TIMEOUT)
-    logger.info("snap %s installed from %s", name, channel)
+        # refresh preserves confinement; --classic is install-only.
+        _run(
+            ["sudo", "snap", "refresh", name, "--channel", channel],
+            timeout=SNAP_TIMEOUT,
+            check=False,
+        )
+        logger.info("snap %s refreshed to %s", name, channel)
+    else:
+        cmd = ["sudo", "snap", "install", name, "--channel", channel]
+        if classic:
+            cmd.append("--classic")
+        _run(cmd, timeout=SNAP_TIMEOUT)
+        logger.info("snap %s installed from %s", name, channel)
+    tracked = tracked_channel(name)
+    if tracked and tracked != channel:
+        raise SetupError(
+            f"snap {name} tracks {tracked!r} but {channel!r} was requested "
+            f"(snapd may refuse a cross-track refresh); refusing to run the "
+            f"wrong engine version"
+        )
 
 
 # ------------------------------------------------------------------
@@ -190,7 +226,10 @@ def ensure_environment(
     try:
         ensure_microk8s(microk8s_channel)
         install_snap("juju", juju_channel, classic=True)
-        bootstrap_controller(controller, juju_cli)
+        # Keyword args: bootstrap_controller(controller, cloud=None, juju_cli=...).
+        # Passing juju_cli positionally would bind it to `cloud` (truthy) and skip
+        # the add-k8s mk8s registration, bootstrapping a non-existent cloud.
+        bootstrap_controller(controller=controller, juju_cli=juju_cli)
     except subprocess.CalledProcessError as exc:
         raise SetupError(
             f"Command failed: {exc.cmd!r}\nstdout: {exc.stdout}\nstderr: {exc.stderr}"
