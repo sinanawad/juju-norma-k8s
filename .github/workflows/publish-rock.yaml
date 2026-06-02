@@ -31,7 +31,26 @@ on:
       - "specs/**"
       - "scripts/**"
       - "**.md"
+      # These don't affect the built charm or ROCK, so they must not trigger a
+      # republish (e.g. dependabot GitHub-Actions bumps under .github/**, which
+      # otherwise spam latest/edge with churn revisions). Artifact inputs
+      # (workload/**, src/**, lib/**, charmcraft*.yaml, rockcraft.yaml,
+      # pyproject.toml, uv.lock, icon.svg) are deliberately NOT ignored.
+      - ".github/**"
+      - "tests/**"
+      - "Makefile"
+      - ".gitignore"
   workflow_dispatch:
+
+concurrency:
+  # Collapse a burst of main pushes (e.g. several dependabot merges landing
+  # seconds apart) so only the NEWEST commit's ROCK build runs to completion.
+  # Without this, overlapping builds finish out-of-order and the chained
+  # publish-edge that finishes last wins latest/edge — which may be a stale
+  # revision. Per-ref group so release-tag builds get their own group and are
+  # never cancelled by main pushes or each other.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
