@@ -7,6 +7,8 @@ import time
 import jubilant
 import pytest
 
+from .conftest import JUJU_4, kubectl
+
 APP = "juju-norma-k8s"
 
 
@@ -191,33 +193,98 @@ class TestModelMigration:
             pytest.xfail(f"Model migration not supported in this environment: {e}")
 
 
+def _remove_app(juju: jubilant.Juju, app: str) -> None:
+    with contextlib.suppress(jubilant.CLIError):
+        juju.cli("remove-application", app, "--force", "--no-wait", "--no-prompt")
+    with contextlib.suppress(jubilant.CLIError, TimeoutError):
+        juju.wait(lambda s: app not in s.apps, timeout=180)
+
+
 class TestDeployConstraints:
-    """FR-037: Deploy with K8s resource constraints."""
+    """P2-2 / FR-037: K8s constraint accept/reject + pod-spec application.
 
-    @pytest.fixture(autouse=True)
-    def _require_destructive(self, request):
-        if not request.config.getoption("--run-destructive"):
-            pytest.skip("Destructive test — pass --run-destructive to run")
+    Live-verified (4.0.12 K8s, 2026-06-04): the K8s provider REJECTS `cores`
+    at the deploy precheck ("constraints cores not supported"), while `mem` and
+    `cpu-power` are ACCEPTED. But `mem` is not (yet) applied to the sidecar
+    workload container's resources — application.go carries a `// TODO: ...
+    Constraints ...` for that path — so the pod-spec assertion is a strict-xfail
+    sentinel that flips when Juju wires it.
+    """
 
-    def test_deploy_with_constraints(self, juju: jubilant.Juju, charm_path, oci_image):
-        """Deploying with --constraints is accepted and charm reaches active."""
-        alt_app = "norma-constraints"
+    def test_cores_constraint_rejected_on_k8s(self, juju: jubilant.Juju, charm_path, oci_image):
+        """`cores` is not a K8s constraint — deploy is rejected at the precheck.
+
+        (The previous test wrongly expected `cores=1` to reach active; it only
+        passed unnoticed because it was --run-destructive-gated and never ran.)
+        """
+        app = "norma-cores"
+        with pytest.raises(jubilant.CLIError) as exc:
+            juju.cli(
+                "deploy",
+                str(charm_path),
+                app,
+                "--constraints",
+                "cores=1",
+                "--resource",
+                f"juju-norma-image={oci_image}",
+            )
+        msg = str(exc.value).lower()
+        assert "cores" in msg and "not supported" in msg, exc.value
+        _remove_app(juju, app)  # defensive — the deploy should not have created it
+
+    def test_mem_cpu_constraints_accepted_on_k8s(self, juju: jubilant.Juju, charm_path, oci_image):
+        """`mem` and `cpu-power` ARE K8s-honoured constraints — deploy reaches
+        active (unlike `cores`)."""
+        app = "norma-memcpu"
         try:
             juju.cli(
                 "deploy",
                 str(charm_path),
-                alt_app,
+                app,
                 "--constraints",
-                "mem=512M cores=1",
+                "mem=512M cpu-power=200",
                 "--resource",
                 f"juju-norma-image={oci_image}",
             )
-            juju.wait(
-                lambda s: alt_app in s.apps and s.apps[alt_app].is_active,
-                timeout=300,
-            )
+            juju.wait(lambda s: app in s.apps and s.apps[app].is_active, timeout=300)
         finally:
-            with contextlib.suppress(jubilant.CLIError):
-                juju.cli("remove-application", alt_app, "--force", "--no-wait", "--no-prompt")
-            with contextlib.suppress(jubilant.CLIError, TimeoutError):
-                juju.wait(lambda s: alt_app not in s.apps, timeout=120)
+            _remove_app(juju, app)
+
+    @pytest.mark.xfail(
+        JUJU_4,
+        strict=True,
+        reason=(
+            "3.6->4.0 REGRESSION (caught by xfail_strict): Juju 3.6 applies `mem` "
+            "to the K8s workload container, but 4.0.12 accepts the constraint and "
+            "drops it on the sidecar path (application.go `// TODO ... Constraints`). "
+            "Positive assertion on 3.6 (works); strict xfail on 4.0 — flips to a "
+            "loud failure when 4.0 re-wires ApplyWorkloadConstraints for sidecars."
+        ),
+    )
+    def test_mem_constraint_reaches_workload_pod(self, juju: jubilant.Juju, charm_path, oci_image):
+        """`mem` should set the workload container's memory request/limit
+        (works on 3.6; regressed on 4.0.12 — see the conditional xfail)."""
+        probe = kubectl("version", "--client")
+        if probe is None or probe.returncode != 0:
+            pytest.skip("kubectl (microk8s) unavailable")
+        app = "norma-memspec"
+        ns = juju.model.split(":")[-1]
+        try:
+            juju.cli(
+                "deploy",
+                str(charm_path),
+                app,
+                "--constraints",
+                "mem=512M",
+                "--resource",
+                f"juju-norma-image={oci_image}",
+            )
+            juju.wait(lambda s: app in s.apps and s.apps[app].is_active, timeout=300)
+            out = kubectl("get", "pod", f"{app}-0", "-n", ns, "-o", "json")
+            pod = json.loads(out.stdout)
+            norma = next(c for c in pod["spec"]["containers"] if c["name"] == "norma")
+            res = norma.get("resources", {})
+            mem = res.get("limits", {}).get("memory") or res.get("requests", {}).get("memory")
+            assert mem and "512" in mem, f"mem constraint not on workload pod: {res}"
+        finally:
+            _remove_app(juju, app)
