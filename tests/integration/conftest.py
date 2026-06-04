@@ -126,6 +126,21 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+def kubectl(*args: str, timeout: int = 60):
+    """Run ``microk8s kubectl`` (override via ``$KUBECTL``).
+
+    CI sets ``KUBECTL="sudo microk8s kubectl"`` because the runner user is not
+    yet in the ``snap_microk8s`` group within the same job. Returns the
+    ``CompletedProcess`` or ``None`` when kubectl is unavailable, so pod-spec
+    tests can ``skip`` gracefully off microk8s rather than error.
+    """
+    base = os.environ.get("KUBECTL", "microk8s kubectl").split()
+    try:
+        return subprocess.run([*base, *args], capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
 # ------------------------------------------------------------------
 # Session-scoped fixtures
 # ------------------------------------------------------------------

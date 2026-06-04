@@ -188,6 +188,11 @@ jobs:
           SETUP_ENVIRONMENT: "1"
           JUJU_CHANNEL: ${{ matrix.channel }}
           CHARM_PATH: ${{ github.workspace }}
+          # Pod-spec / pod-deletion tests shell out to kubectl. The runner user
+          # is only added to snap_microk8s mid-job (group change needs a new
+          # login), so use sudo here; locally the helper defaults to plain
+          # `microk8s kubectl`.
+          KUBECTL: "sudo microk8s kubectl"
       # Machine-readable per-channel pass/fail record — the deliverable for a
       # calibration charm. Uploaded even on failure (`if: always()`); pytest
       # writes report.xml regardless of test outcome.
