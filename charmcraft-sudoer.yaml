@@ -15,9 +15,9 @@ description: |
   Used by CI to test all privilege levels. Never published to CharmHub.
 
 base: ubuntu@24.04
+# amd64-only, matching the principal charmcraft.yaml (see the rationale there).
 platforms:
   amd64:
-  arm64:
 
 parts:
   norma-charm:
