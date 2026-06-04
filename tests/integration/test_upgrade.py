@@ -61,7 +61,15 @@ class TestUpgrade:
                 # the fresh unit answers.
                 time.sleep(5)
                 continue
-            if names and names[0] == "upgrade-charm" and "install" not in names:
+            # Require pebble-ready too: it fires just after `start`, so breaking
+            # on upgrade-charm alone can snapshot the ledger mid-lifecycle
+            # (['upgrade-charm','config-changed','start']) before pebble-ready.
+            if (
+                names
+                and names[0] == "upgrade-charm"
+                and "install" not in names
+                and "pebble-ready" in names
+            ):
                 break
             time.sleep(5)
         else:
