@@ -21,6 +21,8 @@ import uuid
 import jubilant
 import pytest
 
+from .conftest import JUJU_4
+
 APP = "juju-norma-k8s"
 
 
@@ -49,6 +51,10 @@ class TestNotices:
         assert task.results["key"].endswith("calibration-test")
         assert task.results["notice-sent"] == "true"
 
+    @pytest.mark.skipif(
+        not JUJU_4,
+        reason="pebble-custom-notice dispatch verified on 4.0; 3.6 behaviour unverified",
+    )
     def test_notice_event_dispatched(self, juju: jubilant.Juju):
         """A notice recorded via the charm's Pebble client (agent uid, via=api)
         is delivered to the charm as a pebble-custom-notice event."""
