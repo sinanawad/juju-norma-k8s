@@ -53,7 +53,14 @@ class TestUpgrade:
         # pre-refresh ledger held.
         names: list[str] = []
         for _ in range(72):  # up to ~6 min
-            names = [e["event_name"] for e in _ledger(juju)]
+            try:
+                names = [e["event_name"] for e in _ledger(juju)]
+            except (jubilant.TaskError, jubilant.CLIError, TimeoutError):
+                # The get-event-log action is unavailable while the pod is being
+                # recreated (the whole point of the refresh) — keep polling until
+                # the fresh unit answers.
+                time.sleep(5)
+                continue
             if names and names[0] == "upgrade-charm" and "install" not in names:
                 break
             time.sleep(5)
