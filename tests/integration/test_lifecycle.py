@@ -7,7 +7,7 @@ import time
 import jubilant
 import pytest
 
-from .conftest import kubectl
+from .conftest import JUJU_4, kubectl
 
 APP = "juju-norma-k8s"
 
@@ -251,15 +251,19 @@ class TestDeployConstraints:
             _remove_app(juju, app)
 
     @pytest.mark.xfail(
+        JUJU_4,
         strict=True,
         reason=(
-            "Juju <=4.0.12 accepts `mem` on K8s but does NOT apply it to the "
-            "sidecar workload container (application.go TODO path); flips when "
-            "Juju wires ApplyWorkloadConstraints for sidecar charms."
+            "3.6->4.0 REGRESSION (caught by xfail_strict): Juju 3.6 applies `mem` "
+            "to the K8s workload container, but 4.0.12 accepts the constraint and "
+            "drops it on the sidecar path (application.go `// TODO ... Constraints`). "
+            "Positive assertion on 3.6 (works); strict xfail on 4.0 — flips to a "
+            "loud failure when 4.0 re-wires ApplyWorkloadConstraints for sidecars."
         ),
     )
     def test_mem_constraint_reaches_workload_pod(self, juju: jubilant.Juju, charm_path, oci_image):
-        """`mem` should set the workload container's memory request/limit."""
+        """`mem` should set the workload container's memory request/limit
+        (works on 3.6; regressed on 4.0.12 — see the conditional xfail)."""
         probe = kubectl("version", "--client")
         if probe is None or probe.returncode != 0:
             pytest.skip("kubectl (microk8s) unavailable")
