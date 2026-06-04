@@ -79,6 +79,10 @@ jobs:
     name: Create GitHub Release
     needs: [promote-to-candidate, build-sudoer]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # create the GitHub Release
+      id-token: write       # OIDC token for build-provenance signing
+      attestations: write   # record the provenance attestation
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -102,6 +106,21 @@ jobs:
         with:
           name: sudoer-charm
 
+      - name: Generate SHA256SUMS
+        run: |
+          sha256sum juju-norma-k8s_amd64.charm juju-norma-k8s-sudoer_amd64.charm \
+            > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance (charms)
+        # Signed SLSA provenance for both .charm artifacts; verify with
+        # `gh attestation verify <file> --owner <owner>`.
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            juju-norma-k8s_amd64.charm
+            juju-norma-k8s-sudoer_amd64.charm
+
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -110,4 +129,5 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             juju-norma-k8s_amd64.charm \
-            juju-norma-k8s-sudoer_amd64.charm
+            juju-norma-k8s-sudoer_amd64.charm \
+            SHA256SUMS

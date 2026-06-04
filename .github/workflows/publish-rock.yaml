@@ -135,6 +135,11 @@ jobs:
     name: Assemble multi-arch manifest
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write      # push the manifest list + the attestation to ghcr
+      id-token: write       # OIDC token for build-provenance signing
+      attestations: write   # record the provenance attestation
     steps:
       - name: Determine tag base
         id: tag
@@ -178,3 +183,22 @@ jobs:
           grep -q "linux/amd64" inspect.txt
           grep -q "linux/arm64" inspect.txt
           echo "Multi-arch manifest verified: amd64 + arm64 present"
+
+      - name: Capture pushed image digest
+        id: digest
+        run: |
+          digest=$(docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
+            --format '{{ .Manifest.Digest }}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Image digest: $digest"
+
+      - name: Attest build provenance (ROCK image)
+        # Cryptographically signed SLSA provenance for the pushed multi-arch
+        # image, stored alongside it in ghcr; verify with `gh attestation verify
+        # oci://<ref> --owner <owner>`.
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
