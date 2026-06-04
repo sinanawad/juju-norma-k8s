@@ -28,7 +28,7 @@ echo "==> Applying branch protection to ${REPO}@${BRANCH}"
 echo '{
   "required_status_checks": {
     "strict": false,
-    "contexts": ["Lint", "Unit Tests", "Pack Charm", "Build ROCK"]
+    "contexts": ["Lint", "Unit Tests", "Check Libraries", "Pack Charm", "Build ROCK"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": null,
