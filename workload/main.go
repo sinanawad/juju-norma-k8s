@@ -221,7 +221,17 @@ func main() {
 
 	port := flag.Int("port", defaultPort, "HTTP listen port")
 	check := flag.Bool("check", false, "Run health check against own /health endpoint and exit")
+	showVersion := flag.Bool("version", false, "Print the build version and exit")
 	flag.Parse()
+
+	// --version mode: print the version baked in at link time and exit. The
+	// charm's get-version action execs this to identify exactly which workload
+	// image (OCI resource revision) is running — the env-injected VERSION is the
+	// charm's version, which does not change on a `refresh --resource` image swap.
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	// --check mode: probe and exit.
 	if *check {

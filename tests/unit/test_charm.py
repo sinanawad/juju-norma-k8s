@@ -1651,7 +1651,12 @@ class TestUpgrade:
             assert "upgrade-charm" in event_names
 
     def test_get_version_returns_versions(self):
-        """get-version action returns charm and workload versions."""
+        """get-version reports the binary's baked version (the image identity).
+
+        The layer injects VERSION=1.2.3 (the charm version); the action must
+        instead report what `norma --version` prints (the image's baked version),
+        so a `refresh --resource` image swap is observable.
+        """
         ctx = ops.testing.Context(NormaK8sCharm)
         norma_c = ops.testing.Container(
             name="norma",
@@ -1662,14 +1667,22 @@ class TestUpgrade:
                 )
             },
             service_statuses={"norma": ops.pebble.ServiceStatus.ACTIVE},
-            execs=frozenset({ops.testing.Exec(command_prefix=[norma.BINARY_PATH, "--check"])}),
+            execs=frozenset(
+                {
+                    ops.testing.Exec(
+                        command_prefix=[norma.BINARY_PATH, "--version"],
+                        stdout="main-abc1234\n",
+                    )
+                }
+            ),
         )
         state = ops.testing.State(
             containers=[norma_c, NORMA_SECONDARY],
         )
         ctx.run(ctx.on.action("get-version"), state)
         assert ctx.action_results["charm-version"] == "dev"
-        assert ctx.action_results["workload-version"] == "1.2.3"
+        # The image's baked version, NOT the charm-injected VERSION env (1.2.3).
+        assert ctx.action_results["workload-version"] == "main-abc1234"
 
     def test_get_version_workload_unavailable(self):
         """get-version reports unavailable when Pebble is disconnected."""

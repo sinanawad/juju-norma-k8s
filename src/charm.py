@@ -1007,15 +1007,13 @@ class NormaK8sCharm(ops.CharmBase):
         container = self.unit.get_container(norma.CONTAINER_NAME)
         if container.can_connect():
             try:
-                process = container.exec(
-                    [norma.BINARY_PATH, "--check"],
-                )
-                process.wait()
-                # Binary is reachable — read version from env
-                plan = container.get_plan()
-                svc = plan.services.get(norma.CONTAINER_NAME)
-                if svc:
-                    workload_version = svc.environment.get("VERSION", "unknown")
+                # Read the version baked into the running binary (the OCI image /
+                # resource revision), NOT the charm-injected VERSION env: only the
+                # former changes on a `juju refresh --resource <image>=<rev>` swap,
+                # so it identifies which image is actually running.
+                process = container.exec([norma.BINARY_PATH, "--version"])
+                stdout, _ = process.wait_output()
+                workload_version = stdout.strip() or "unknown"
             except (ops.pebble.ExecError, ops.pebble.ConnectionError):
                 pass
 

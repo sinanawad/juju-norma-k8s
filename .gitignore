@@ -22,6 +22,8 @@ htmlcov/
 
 # Go
 workload/norma
+# Generated at pack time by CI (git-derived version baked into the binary).
+workload/version.txt
 
 # IDE
 .vscode/
