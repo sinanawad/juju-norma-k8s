@@ -5,6 +5,8 @@ import json
 
 import jubilant
 
+from .conftest import JUJU_4
+
 APP = "juju-norma-k8s"
 
 
@@ -52,8 +54,12 @@ class TestExpose:
     def test_expose_unexpose(self, juju: jubilant.Juju):
         """juju expose/unexpose toggles exposed flag in juju status."""
         try:
-            # Juju 3.6 requires juju-external-hostname for K8s expose.
-            juju.cli("config", APP, "juju-external-hostname=test.local")
+            # Juju 3.6 K8s expose requires juju-external-hostname as an
+            # application config; Juju 4.0 removed that app-config option (expose
+            # works directly) and rejects it as 'unknown option'. So set it only
+            # on Juju < 4 — this is a real 3.6->4.0 behaviour delta.
+            if not JUJU_4:
+                juju.cli("config", APP, "juju-external-hostname=test.local")
             juju.cli("expose", APP)
             self._wait_exposed(juju, True)
 
@@ -62,4 +68,5 @@ class TestExpose:
         finally:
             with contextlib.suppress(jubilant.CLIError):
                 juju.cli("unexpose", APP)
-                juju.cli("config", APP, "--reset", "juju-external-hostname")
+                if not JUJU_4:
+                    juju.cli("config", APP, "--reset", "juju-external-hostname")

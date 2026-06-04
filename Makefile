@@ -12,14 +12,17 @@ unit:
 	uv run coverage run -m pytest tests/unit -v
 	uv run coverage report
 
+# --log-cli-level=INFO streams setup_env + jubilant logs live (bootstrap, deploy,
+# per-op progress) so a hang/timeout shows WHERE it stalled — pytest's captured
+# stdout is buffered and lost if the step is killed at the CI timeout.
 integration:
-	uv run pytest tests/integration -v --tb=short
+	uv run pytest tests/integration -v --tb=short --log-cli-level=INFO
 
 integration-smoke:
-	uv run pytest tests/integration -v --tb=short -m smoke
+	uv run pytest tests/integration -v --tb=short --log-cli-level=INFO -m smoke
 
 integration-setup:
-	SETUP_ENVIRONMENT=1 uv run pytest tests/integration -v --tb=short
+	SETUP_ENVIRONMENT=1 uv run pytest tests/integration -v --tb=short --log-cli-level=INFO
 
 clean:
 	rm -rf *.charm __pycache__ .coverage htmlcov .pytest_cache
