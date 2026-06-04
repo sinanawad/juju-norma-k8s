@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # protect-main.sh
 #
-# Apply minimal branch protection to `main`:
-#   - block force-push
-#   - block branch deletion
+# Apply branch protection to `main`:
+#   - block force-push + branch deletion
+#   - REQUIRE the fast, deterministic CI checks to pass before merge
+#     (Lint, Unit Tests, Pack Charm, Build ROCK) — this is what makes
+#     `gh pr merge --auto` actually gate on green.
 #
-# Leaves direct pushes and admin overrides open — appropriate for
-# solo-developer or small-team workflows. Tighten later by editing
-# the JSON body below (set required_pull_request_reviews / required_
-# status_checks to enforce PR + CI gates).
+# Notes:
+#   - The slow self-hosted integration job is intentionally NOT required
+#     (runner availability would block merges); verify it out-of-band.
+#   - `enforce_admins:false` lets an admin override in emergencies, but
+#     auto-merge still waits for the required checks.
+#   - `required_pull_request_reviews:null` keeps solo self-merge working.
+#   - `strict:false` avoids forcing every branch up-to-date before merge.
 #
 # Requires: gh CLI authenticated against an account with admin access
 # on the target repository.
@@ -21,7 +26,10 @@ BRANCH="${2:-main}"
 echo "==> Applying branch protection to ${REPO}@${BRANCH}"
 
 echo '{
-  "required_status_checks": null,
+  "required_status_checks": {
+    "strict": false,
+    "contexts": ["Lint", "Unit Tests", "Pack Charm", "Build ROCK"]
+  },
   "enforce_admins": false,
   "required_pull_request_reviews": null,
   "restrictions": null,
@@ -31,6 +39,6 @@ echo '{
 
 echo "==> Verifying"
 gh api "/repos/${REPO}/branches/${BRANCH}/protection" \
-  --jq '{allow_force_pushes: .allow_force_pushes.enabled, allow_deletions: .allow_deletions.enabled, enforce_admins: .enforce_admins.enabled}'
+  --jq '{required_checks: .required_status_checks.contexts, allow_force_pushes: .allow_force_pushes.enabled, allow_deletions: .allow_deletions.enabled, enforce_admins: .enforce_admins.enabled}'
 
 echo "==> Done. To undo: gh api -X DELETE /repos/${REPO}/branches/${BRANCH}/protection"

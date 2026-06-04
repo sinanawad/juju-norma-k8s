@@ -9,7 +9,10 @@ updates:
     commit-message:
       prefix: "ci"
 
-  - package-ecosystem: pip
+  # `uv` ecosystem (GA 2025-03) updates pyproject.toml AND uv.lock; the old
+  # `pip` ecosystem left uv.lock stale — and CI now runs `uv sync --frozen` +
+  # `uv lock --check`, so a stale lock is a real drift/break risk.
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly

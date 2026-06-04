@@ -26,7 +26,7 @@ jobs:
     name: Promote latest/edge -> latest/candidate
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
@@ -45,12 +45,12 @@ jobs:
     name: Pack sudoer variant
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
 
       - name: Setup LXD
-        uses: canonical/setup-lxd@main
+        uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee # v1
 
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
@@ -69,7 +69,7 @@ jobs:
           mv charmcraft-principal.yaml.bak charmcraft.yaml
 
       - name: Upload sudoer artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sudoer-charm
           path: juju-norma-k8s-sudoer_amd64.charm
@@ -80,7 +80,7 @@ jobs:
     needs: [promote-to-candidate, build-sudoer]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
@@ -98,7 +98,7 @@ jobs:
           mv "$downloaded" juju-norma-k8s_amd64.charm
 
       - name: Download sudoer artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: sudoer-charm
 
