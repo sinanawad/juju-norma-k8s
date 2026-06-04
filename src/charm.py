@@ -978,6 +978,7 @@ class NormaK8sCharm(ops.CharmBase):
 
         key = event.params.get("key", "norma.dev/calibration-test")
         data = event.params.get("data", "{}")
+        via = event.params.get("via", "api")
 
         try:
             data_dict = json.loads(data)
@@ -989,13 +990,28 @@ class NormaK8sCharm(ops.CharmBase):
             return
 
         try:
-            cmd = ["/charm/bin/pebble", "notify", key]
-            for k, v in data_dict.items():
-                cmd.append(f"{k}={v}")
-            process = container.exec(cmd)
-            process.wait()
-            event.set_results({"notice-sent": "true", "key": key})
-        except (ops.pebble.ExecError, ops.pebble.ConnectionError) as e:
+            notice_id = ""
+            if via == "workload":
+                # Record the notice from INSIDE the workload container, so it is
+                # owned by the workload uid. Juju's uniter noticer queries Pebble
+                # without `Users: all`, so it never sees a non-root workload's
+                # notices and the pebble-custom-notice event is NOT dispatched
+                # (verified on 4.0.12). Kept as a calibration sentinel — see the
+                # xfail test in tests/integration/test_notices.py.
+                cmd = ["/charm/bin/pebble", "notify", key]
+                cmd.extend(f"{k}={v}" for k, v in data_dict.items())
+                container.exec(cmd).wait()
+            else:
+                # Record the notice via the charm's own Pebble client, so it is
+                # owned by the agent uid. The agent's noticer sees its own uid's
+                # notices, so Juju dispatches the pebble-custom-notice event.
+                notice_id = container.pebble.notify(
+                    ops.pebble.NoticeType.CUSTOM, key, data=data_dict or None
+                )
+            event.set_results(
+                {"notice-sent": "true", "key": key, "via": via, "notice-id": notice_id}
+            )
+        except (ops.pebble.Error, ValueError) as e:
             event.fail(f"Failed to send notice: {e}")
 
     def _on_get_version_action(self, event: ops.ActionEvent) -> None:
