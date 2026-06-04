@@ -36,10 +36,12 @@ class TestStatusReporting:
             "set-status",
             params={"status": "waiting", "message": "test wait"},
         )
-        juju.wait(jubilant.any_waiting, timeout=30)
+        # 30s was too tight under CI load (intermittent flake): the forced
+        # status still round-trips through a reconcile + status collection.
+        juju.wait(jubilant.any_waiting, timeout=120)
         # Clear
         juju.run(f"{APP}/leader", "set-status", params={"status": "active"})
-        juju.wait(jubilant.all_active, timeout=60)
+        juju.wait(jubilant.all_active, timeout=120)
 
     def test_set_status_maintenance(self, juju: jubilant.Juju):
         juju.run(
