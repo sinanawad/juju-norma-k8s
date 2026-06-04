@@ -1,5 +1,6 @@
 """Integration tests for US8: Scaling (add/remove units) + leadership."""
 
+import contextlib
 import json
 import time
 
@@ -77,44 +78,60 @@ class TestLeaderAndPodRecreation:
             juju.cli("remove-unit", f"{APP}/0")
         assert "named units" in str(exc.value).lower(), exc.value
 
-    def test_leader_pod_recreation_preserves_identity_and_leadership(self, juju: jubilant.Juju):
-        """Deleting the leader's pod recreates the same unit (identity persists
-        via the statefulset) and leadership is retained — the K8s analogue of
-        leader resilience, and a check that the charm holds no StoredState."""
+    def test_leader_pod_recreation_preserves_identity_and_leadership(
+        self, juju: jubilant.Juju, charm_path, oci_image
+    ):
+        """Deleting a unit's pod recreates the SAME unit (statefulset identity
+        persists) and it stays the leader — the K8s analogue of leader resilience
+        and a check that the charm holds no StoredState.
+
+        Runs on a SEPARATE app: the pod recreation resets the charm's in-memory
+        event ledger, so doing it on the shared deployment would wipe deploy-only
+        events (e.g. storage-attached) that later tests assert on.
+        """
         probe = kubectl("version", "--client")
         if probe is None or probe.returncode != 0:
             pytest.skip("kubectl (microk8s) unavailable")
+        app = "norma-recreate"
         ns = juju.model.split(":")[-1]
+        try:
+            juju.cli(
+                "deploy",
+                str(charm_path),
+                app,
+                "--resource",
+                f"juju-norma-image={oci_image}",
+            )
+            juju.wait(lambda s: app in s.apps and s.apps[app].is_active, timeout=300)
 
-        units = juju.status().apps[APP].units
-        leader_unit = next(
-            (u for u, v in units.items() if getattr(v, "leader", False)), f"{APP}/0"
-        )
-        pod = leader_unit.replace("/", "-")
+            pod = f"{app}-0"
+            uid = kubectl("get", "pod", pod, "-n", ns, "-o", "jsonpath={.metadata.uid}")
+            before = uid.stdout.strip() if uid else ""
 
-        uid = kubectl("get", "pod", pod, "-n", ns, "-o", "jsonpath={.metadata.uid}")
-        before = uid.stdout.strip() if uid else ""
+            kubectl("delete", "pod", pod, "-n", ns, "--wait=false")
 
-        kubectl("delete", "pod", pod, "-n", ns, "--wait=false")
+            # Wait until the statefulset recreates the pod (new UID) + unit active.
+            recreated = False
+            for _ in range(60):  # ~5 min
+                r = kubectl("get", "pod", pod, "-n", ns, "-o", "jsonpath={.metadata.uid}")
+                now = r.stdout.strip() if r else ""
+                a = juju.status().apps.get(app)
+                unit = a.units.get(f"{app}/0") if a else None
+                if now and now != before and unit is not None and unit.is_active:
+                    recreated = True
+                    break
+                time.sleep(5)
+            assert recreated, f"pod {pod} was not recreated / unit not active"
 
-        # Wait until the statefulset recreates the pod (new UID) and the unit is
-        # active again.
-        recreated = False
-        for _ in range(60):  # ~5 min
-            r = kubectl("get", "pod", pod, "-n", ns, "-o", "jsonpath={.metadata.uid}")
-            now = r.stdout.strip() if r else ""
-            unit = juju.status().apps[APP].units.get(leader_unit)
-            if now and now != before and unit is not None and unit.is_active:
-                recreated = True
-                break
-            time.sleep(5)
-        assert recreated, f"pod {pod} was not recreated / unit {leader_unit} not active"
-
-        # Identity persists: same unit name, active.
-        u2 = juju.status().apps[APP].units
-        assert leader_unit in u2 and u2[leader_unit].is_active
-        # Leadership retained (no spurious re-election on K8s pod recreation).
-        new_leader = next((u for u, v in u2.items() if getattr(v, "leader", False)), None)
-        assert new_leader == leader_unit, f"leadership moved unexpectedly to {new_leader}"
-        # Peer relation data still reflects the cluster (the charm reconciled).
-        assert juju.run(f"{APP}/leader", "get-peer-data").success
+            # Identity persists: same unit, active, and still the leader.
+            units = juju.status().apps[app].units
+            assert f"{app}/0" in units and units[f"{app}/0"].is_active
+            leaders = [u for u, v in units.items() if getattr(v, "leader", False)]
+            assert leaders == [f"{app}/0"], f"unexpected leadership after recreation: {leaders}"
+            # Peer data still readable — the charm reconciled with no StoredState.
+            assert juju.run(f"{app}/leader", "get-peer-data").success
+        finally:
+            with contextlib.suppress(jubilant.CLIError):
+                juju.cli("remove-application", app, "--force", "--no-wait", "--no-prompt")
+            with contextlib.suppress(jubilant.CLIError, TimeoutError):
+                juju.wait(lambda s: app not in s.apps, timeout=180)
