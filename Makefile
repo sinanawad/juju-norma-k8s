@@ -16,10 +16,10 @@ unit:
 # per-op progress) so a hang/timeout shows WHERE it stalled — pytest's captured
 # stdout is buffered and lost if the step is killed at the CI timeout.
 integration:
-	uv run pytest tests/integration -v --tb=short --log-cli-level=INFO
+	uv run pytest tests/integration -v --tb=short --log-cli-level=INFO --junitxml=report.xml
 
 integration-smoke:
-	uv run pytest tests/integration -v --tb=short --log-cli-level=INFO -m smoke
+	uv run pytest tests/integration -v --tb=short --log-cli-level=INFO --junitxml=report.xml -m smoke
 
 integration-setup:
 	SETUP_ENVIRONMENT=1 uv run pytest tests/integration -v --tb=short --log-cli-level=INFO

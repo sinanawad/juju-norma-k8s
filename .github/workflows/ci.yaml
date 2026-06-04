@@ -188,4 +188,18 @@ jobs:
           SETUP_ENVIRONMENT: "1"
           JUJU_CHANNEL: ${{ matrix.channel }}
           CHARM_PATH: ${{ github.workspace }}
+      # Machine-readable per-channel pass/fail record — the deliverable for a
+      # calibration charm. Uploaded even on failure (`if: always()`); pytest
+      # writes report.xml regardless of test outcome.
+      - name: Compute report name
+        if: always()
+        id: report
+        run: echo "name=test-report-$(echo '${{ matrix.channel }}-${{ matrix.mode }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.report.outputs.name }}
+          path: report.xml
+          if-no-files-found: warn
 
