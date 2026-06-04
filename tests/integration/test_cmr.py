@@ -6,6 +6,7 @@ from the second model, integrate, and verify relation data flows.
 """
 
 import contextlib
+import time
 import uuid
 
 import jubilant
@@ -116,7 +117,18 @@ class TestCMR:
             for iface in ([rel.interface] if hasattr(rel, "interface") else [str(rel)])
         ), f"Expected calibration relation, got: {app_relations}"
 
-        # Cross-model relation data flows (verified via model A introspect).
-        task = self.model_a.run(f"{APP}/leader", "introspect", params={"sections": "relations"})
-        assert task.success
-        assert "calibration-provider" in task.results.get("relations", "")
+        # Cross-model relation data flows to model A. The CMR relation can take a
+        # moment to propagate to the offering side after integrate, so poll the
+        # introspection rather than asserting once (this was an intermittent flake).
+        relations = ""
+        for _ in range(18):  # ~90s
+            task = self.model_a.run(
+                f"{APP}/leader", "introspect", params={"sections": "relations"}
+            )
+            relations = task.results.get("relations", "") if task.success else ""
+            if "calibration-provider" in relations:
+                break
+            time.sleep(5)
+        assert "calibration-provider" in relations, (
+            f"calibration-provider relation did not propagate to model A: {relations}"
+        )
