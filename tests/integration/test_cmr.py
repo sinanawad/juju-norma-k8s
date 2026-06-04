@@ -6,7 +6,6 @@ from the second model, integrate, and verify relation data flows.
 """
 
 import contextlib
-import json
 import uuid
 
 import jubilant
@@ -24,22 +23,19 @@ class TestCMR:
         self.model_a = juju
         cli = juju.cli_binary if hasattr(juju, "cli_binary") else "juju"
 
-        # Create model B on the same controller.
+        # Create model B on the SAME controller + cloud as model A. Resolve both
+        # from the same env vars conftest uses, NOT by parsing `show-model`: that
+        # JSON is keyed by the QUALIFIED model name, so the old bare-name lookup
+        # returned {} and fell back to cloud "microk8s" + empty controller — which
+        # fails in CI, where the k8s cloud is registered as "mk8s"
+        # ("ERROR cloud microk8s not found"). Single source of truth.
+        from .conftest import CLOUD_DEFAULT, CONTROLLER_DEFAULT, _env
+
         self.model_b_name = f"cmr-{uuid.uuid4().hex[:8]}"
         no_model = jubilant.Juju(cli_binary=cli)
-        controller = no_model.cli(
-            "show-model",
-            self.model_a.model,
-            "--format=json",
-            include_model=False,
-        )
-        ctrl_name = json.loads(controller).get(self.model_a.model, {}).get("controller-name", "")
-
-        # Detect cloud name from the current model.
-        model_info = json.loads(controller).get(self.model_a.model, {})
-        cloud = model_info.get("cloud", "microk8s")
-
-        no_model.cli("add-model", self.model_b_name, cloud, "-c", ctrl_name)
+        ctrl_name = _env("JUJU_CONTROLLER", CONTROLLER_DEFAULT)
+        cloud = _env("JUJU_CLOUD", CLOUD_DEFAULT)
+        no_model.cli("add-model", self.model_b_name, cloud, "-c", ctrl_name, include_model=False)
         self.juju_b = jubilant.Juju(model=self.model_b_name, cli_binary=cli)
 
         # Deploy norma in model B.
@@ -63,6 +59,7 @@ class TestCMR:
             self.model_b_name,
             "--no-prompt",
             "--destroy-storage",
+            include_model=False,
         )
 
     def _offer(self):
