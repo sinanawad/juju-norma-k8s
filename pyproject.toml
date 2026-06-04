@@ -35,6 +35,11 @@ show_missing = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "lib"]
+# A K8s-limitation xfail that starts passing (Juju shipped the fix) becomes a
+# loud CI failure instead of a silent XPASS — for a calibration charm the
+# per-channel pass/fail record is the product, so a flipped capability must
+# surface. Mark genuinely-unknown cases with `xfail(strict=False)` explicitly.
+xfail_strict = true
 markers = [
     "smoke: minimal fast integration subset run on PRs/pushes (deploy+active, lifecycle events, one config change, one peer-relation read).",
 ]
