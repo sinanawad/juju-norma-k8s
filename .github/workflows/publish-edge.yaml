@@ -17,6 +17,14 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  # Serialize CharmHub latest/edge uploads so two publishes can't race the
+  # channel pointer. Never cancel an in-flight upload — let it finish; the
+  # newest pending run (latest charm revision) runs after and wins. Belt-and-
+  # suspenders: publish-rock's concurrency already collapses main-push bursts.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: write   # canonical/charming-actions/upload-charm pushes a git tag
                     # ("rev<N>-<sha>") for each new charm revision; without

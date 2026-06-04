@@ -10,6 +10,13 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+concurrency:
+  # Cancel a superseded CI run for the same ref (a new push to a PR/branch
+  # supersedes the previous run), freeing runners — including the long
+  # microk8s integration job. Nightly/dispatch full runs use distinct refs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
