@@ -10,6 +10,11 @@ A comprehensive **Juju K8s calibration charm** that exercises every feature and 
 
 This repository also serves as a **reference implementation** for building Juju K8s charms. See [For AI Agents](#for-ai-agents-building-a-new-charm-from-this-reference) and [Reference Documentation](#reference-documentation) below.
 
+> **Integrating this charm into Juju's CI?** Read the
+> **[Juju-CI Consumption Contract](docs/juju-ci-consumption.md)** — it maps each
+> upstream test charm this replaces to a consumption mode (CharmHub
+> channel/revision vs in-tree source pack) with the exact pin and deploy args.
+
 ## What is this?
 
 `juju-norma-k8s` is not a production workload charm. It is a **test harness** — a purpose-built charm that systematically exercises all 25 Juju K8s features so that Juju's own CI can verify nothing is broken. Every feature is independently testable via dedicated actions, making it trivial to isolate regressions.
