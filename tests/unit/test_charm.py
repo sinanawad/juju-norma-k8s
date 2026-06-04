@@ -1477,7 +1477,23 @@ class TestNotices:
             assert notice_events[0]["extra"]["notice-key"] == expected_key
 
     def test_trigger_notice_action_sends_notice(self):
-        """trigger-notice action executes pebble notify command."""
+        """trigger-notice (default via=api) records the notice via the charm's
+        Pebble client (agent uid) so Juju dispatches the event."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        norma_c = ops.testing.Container(name="norma", can_connect=True)
+        state = ops.testing.State(
+            containers=[norma_c, NORMA_SECONDARY],
+        )
+        ctx.run(ctx.on.action("trigger-notice"), state)
+        assert ctx.action_results["notice-sent"] == "true"
+        assert ctx.action_results["key"] == "norma.dev/calibration-test"
+        assert ctx.action_results["via"] == "api"
+        # pebble.notify returns a notice id (the agent-uid path is taken).
+        assert ctx.action_results["notice-id"]
+
+    def test_trigger_notice_via_workload_uses_exec(self):
+        """via=workload records the notice from inside the workload container
+        (workload uid) — a calibration sentinel for the Juju non-dispatch bug."""
         ctx = ops.testing.Context(NormaK8sCharm)
         norma_c = ops.testing.Container(
             name="norma",
@@ -1494,12 +1510,12 @@ class TestNotices:
                 }
             ),
         )
-        state = ops.testing.State(
-            containers=[norma_c, NORMA_SECONDARY],
-        )
-        ctx.run(ctx.on.action("trigger-notice"), state)
+        state = ops.testing.State(containers=[norma_c, NORMA_SECONDARY])
+        ctx.run(ctx.on.action("trigger-notice", params={"via": "workload"}), state)
         assert ctx.action_results["notice-sent"] == "true"
-        assert ctx.action_results["key"] == "norma.dev/calibration-test"
+        assert ctx.action_results["via"] == "workload"
+        # No notice id from the exec path.
+        assert ctx.action_results["notice-id"] == ""
 
     def test_trigger_notice_fails_disconnected(self):
         """trigger-notice fails when container is disconnected."""
@@ -1512,24 +1528,9 @@ class TestNotices:
         assert "Cannot connect" in str(exc_info.value)
 
     def test_trigger_notice_with_data(self):
-        """trigger-notice passes data as key=value args to pebble notify."""
+        """trigger-notice (via=api) forwards data to the Pebble notify call."""
         ctx = ops.testing.Context(NormaK8sCharm)
-        norma_c = ops.testing.Container(
-            name="norma",
-            can_connect=True,
-            execs=frozenset(
-                {
-                    ops.testing.Exec(
-                        command_prefix=[
-                            "/charm/bin/pebble",
-                            "notify",
-                            "norma.dev/test",
-                            "foo=bar",
-                        ]
-                    ),
-                }
-            ),
-        )
+        norma_c = ops.testing.Container(name="norma", can_connect=True)
         state = ops.testing.State(
             containers=[norma_c, NORMA_SECONDARY],
         )
@@ -1542,6 +1543,7 @@ class TestNotices:
         )
         assert ctx.action_results["notice-sent"] == "true"
         assert ctx.action_results["key"] == "norma.dev/test"
+        assert ctx.action_results["via"] == "api"
 
     def test_trigger_notice_invalid_json_fails(self):
         """trigger-notice fails cleanly on invalid JSON data."""

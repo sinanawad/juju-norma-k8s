@@ -182,7 +182,13 @@ actions:
         description: Container name
         default: norma
   trigger-notice:
-    description: Send a Pebble custom notice from the workload container
+    description: |
+      Send a Pebble custom notice. With via=api (default) the charm records the
+      notice through its own Pebble client (agent uid), so Juju's noticer
+      delivers the pebble-custom-notice event to the charm. With via=workload
+      the notice is recorded from inside the workload container (workload uid);
+      Juju <=4.0.12 does NOT deliver those because its uniter noticer omits
+      `Users: all` (see tests/integration/test_notices.py).
     params:
       key:
         type: string
@@ -192,6 +198,11 @@ actions:
         type: string
         description: JSON-encoded key-value data payload
         default: "{}"
+      via:
+        type: string
+        description: "How the notice is recorded: 'api' (charm/agent uid, dispatches) or 'workload' (workload uid)."
+        default: api
+        enum: [api, workload]
   toggle-health:
     description: Toggle the workload health endpoint between healthy/unhealthy
     params:
