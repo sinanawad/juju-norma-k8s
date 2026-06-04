@@ -8,9 +8,14 @@ description: |
   independently via dedicated actions.
 
 base: ubuntu@24.04
+# Charm is published amd64-only. Juju CI runs on x86 and there is no arm64 K8s
+# CI runner to verify an arm64 deploy, so we do not ship an unverified arm64
+# charm (which would resolve a charm rev whose deploy we cannot exercise). The
+# workload ROCK image stays multi-arch (amd64 + arm64) — see rockcraft.yaml and
+# publish-rock.yaml — so re-adding `arm64:` here is the only step needed once an
+# arm64 K8s runner exists to validate it end-to-end.
 platforms:
   amd64:
-  arm64:
 
 parts:
   norma-charm:
