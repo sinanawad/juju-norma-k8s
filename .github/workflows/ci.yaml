@@ -87,6 +87,11 @@ jobs:
         uses: canonical/setup-lxd@main
       - name: Install rockcraft
         run: sudo snap install rockcraft --classic
+      - name: Stamp build version
+        # Bake a distinct version into the binary so the image is
+        # runtime-distinguishable (get-version action). PR/branch builds use a
+        # short SHA; rockcraft reads workload/version.txt at pack time.
+        run: echo "ci-$(git rev-parse --short HEAD)" > workload/version.txt
       - name: Build ROCK (amd64 only)
         run: rockcraft pack --platform amd64
       - name: Upload ROCK artifact

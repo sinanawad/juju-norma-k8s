@@ -90,6 +90,20 @@ jobs:
       - name: Install rockcraft
         run: sudo snap install rockcraft --classic
 
+      - name: Stamp build version
+        # Bake the image tag base (main-<sha> on main, <semver> on a tag) into
+        # the binary so the running workload reports exactly which OCI resource
+        # revision it is — the charm's get-version action execs `norma --version`.
+        # Must match "Determine tag base" below; rockcraft reads workload/version.txt.
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF#refs/tags/v}"
+          else
+            ver="main-$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          echo "$ver" > workload/version.txt
+          echo "Stamped workload version: $ver"
+
       - name: Pack ROCK
         run: rockcraft pack --platform ${{ matrix.arch }}
 

@@ -63,6 +63,12 @@ parts:
       - netgo
     override-build: |
       export GOARCH=${CRAFT_ARCH_BUILD_FOR:-amd64}
-      go build -o ${CRAFT_PART_INSTALL}/bin/norma -tags "osusergo,netgo" -ldflags="-s -w -X main.version=0.1.0" ./...
+      # Bake a per-build version into the binary so each published OCI resource
+      # revision is runtime-distinguishable (the charm's get-version action execs
+      # `norma --version`). CI writes workload/version.txt = the image tag base
+      # (e.g. main-<sha> / <semver>) before packing; absent (local pack) -> "dev".
+      VER="$(cat "${CRAFT_PART_SRC}/version.txt" 2>/dev/null || cat version.txt 2>/dev/null || echo dev)"
+      echo "Building norma binary with version=${VER}"
+      go build -o ${CRAFT_PART_INSTALL}/bin/norma -tags "osusergo,netgo" -ldflags="-s -w -X main.version=${VER}" ./...
     stage:
       - bin/norma
