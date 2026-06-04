@@ -55,10 +55,17 @@ class TestUpgrade:
         for _ in range(72):  # up to ~6 min
             try:
                 names = [e["event_name"] for e in _ledger(juju)]
-            except (jubilant.TaskError, jubilant.CLIError, TimeoutError):
+            except (
+                jubilant.TaskError,
+                jubilant.CLIError,
+                jubilant.WaitError,
+                TimeoutError,
+                ValueError,
+            ):
                 # The get-event-log action is unavailable while the pod is being
-                # recreated (the whole point of the refresh) — keep polling until
-                # the fresh unit answers.
+                # recreated (the whole point of the refresh). jubilant surfaces
+                # that as any of these (incl. ValueError "error running action"),
+                # so tolerate them all and keep polling until the fresh unit answers.
                 time.sleep(5)
                 continue
             # Require pebble-ready too: it fires just after `start`, so breaking
