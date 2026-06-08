@@ -407,6 +407,154 @@ class TestConfiguration:
         assert "secret" in out.unit_status.message.lower()
 
 
+class TestBadBehaviorModes:
+    """P2-4: the bad-behavior-mode test-bed (config-as-control-plane).
+
+    Each mode deliberately violates a §4c convention so the charm can be
+    deployed as a misbehaving fixture for the Juju Advisor. The feature had
+    ZERO test coverage; these tests pin every one of the recognised modes
+    (`NormaK8sCharm.BAD_BEHAVIOR_MODES`) plus the unknown-value fallback.
+
+    Status-emitting modes are asserted via collect_unit_status; the
+    non-status misbehaviours (hook-error, stuck-dying, secret-in-relation)
+    are asserted via the reconcile/relation paths they actually affect.
+    """
+
+    def _state(self, mode, *, leader=False, extra_config=None, relations=None):
+        config = {"bad-behavior-mode": mode}
+        if extra_config:
+            config.update(extra_config)
+        return ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            config=config,
+            leader=leader,
+            relations=relations or [],
+        )
+
+    # ---- status-emitting modes (observed via collect_unit_status) ---- #
+
+    def test_mode_none_is_active_no_message(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.collect_unit_status(), self._state("none"))
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_active_with_message_carries_a_message(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.collect_unit_status(), self._state("active-with-message"))
+        # §4c.2 violation: active conventionally carries NO message.
+        assert isinstance(out.unit_status, ops.ActiveStatus)
+        assert out.unit_status.message == "serving on port 8080"
+
+    def test_active_with_message_uses_configured_port(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(
+            ctx.on.collect_unit_status(),
+            self._state("active-with-message", extra_config={"calibration-int": 9090}),
+        )
+        assert out.unit_status == ops.ActiveStatus("serving on port 9090")
+
+    def test_blocked_no_message_has_empty_message(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.collect_unit_status(), self._state("blocked-no-message"))
+        # §4c.2 violation: blocked MUST carry an actionable message.
+        assert isinstance(out.unit_status, ops.BlockedStatus)
+        assert out.unit_status.message == ""
+
+    def test_stuck_maintenance_holds_maintenance(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.collect_unit_status(), self._state("stuck-maintenance"))
+        assert out.unit_status == ops.MaintenanceStatus("preparing calibration suite")
+
+    def test_status_churn_even_ledger_is_active(self):
+        # status-churn keys on event-ledger length parity; seed an even count.
+        norma.write_event_ledger(
+            [
+                {"event_name": "install", "timestamp": "t", "unit_name": "u", "extra": {}},
+                {"event_name": "start", "timestamp": "t", "unit_name": "u", "extra": {}},
+            ]
+        )
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.collect_unit_status(), self._state("status-churn"))
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_status_churn_odd_ledger_is_waiting(self):
+        norma.write_event_ledger(
+            [
+                {"event_name": "install", "timestamp": "t", "unit_name": "u", "extra": {}},
+                {"event_name": "start", "timestamp": "t", "unit_name": "u", "extra": {}},
+                {"event_name": "config-changed", "timestamp": "t", "unit_name": "u", "extra": {}},
+            ]
+        )
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.collect_unit_status(), self._state("status-churn"))
+        assert out.unit_status == ops.WaitingStatus("waiting for nothing in particular")
+
+    def test_unknown_mode_falls_back_to_active(self):
+        # Any value outside BAD_BEHAVIOR_MODES → compliant baseline (logged warning).
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.collect_unit_status(), self._state("totally-bogus-mode"))
+        assert out.unit_status == ops.ActiveStatus()
+
+    # ---- non-status misbehaviours ---- #
+
+    def test_hook_error_raises_uncaught(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        with pytest.raises(ops.testing.errors.UncaughtCharmError) as exc_info:
+            ctx.run(ctx.on.config_changed(), self._state("hook-error"))
+        assert "hook-error" in str(exc_info.value)
+
+    def test_hook_error_logs_event_before_crashing(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        with pytest.raises(ops.testing.errors.UncaughtCharmError):
+            ctx.run(ctx.on.config_changed(), self._state("hook-error"))
+        # The reconciler logs the event BEFORE raising, so the attempt is recorded.
+        ledger = norma.read_event_ledger()
+        assert any(e["event_name"] == "config-changed" for e in ledger)
+
+    def test_stuck_dying_raises_on_teardown_event(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        with pytest.raises(ops.testing.errors.UncaughtCharmError) as exc_info:
+            ctx.run(ctx.on.stop(), self._state("stuck-dying"))
+        assert "stuck-dying" in str(exc_info.value)
+
+    def test_stuck_dying_deploys_cleanly_on_normal_event(self):
+        # stuck-dying must NOT raise on non-teardown events — the unit deploys fine
+        # and only wedges during teardown.
+        ctx = ops.testing.Context(NormaK8sCharm)
+        ctx.run(ctx.on.config_changed(), self._state("stuck-dying"))
+
+    def test_secret_in_relation_writes_plaintext_from_leader(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(endpoint="calibration-provider")
+        out = ctx.run(
+            ctx.on.relation_changed(rel),
+            self._state("secret-in-relation", leader=True, relations=[rel]),
+        )
+        # §4c.4 violation: plaintext credentials in a public relation databag.
+        app_data = out.get_relation(rel.id).local_app_data
+        assert app_data["password"] == "hunter2"
+        assert app_data["api-key"] == "AKIAIOSFODNN7EXAMPLE"
+
+    def test_secret_in_relation_is_noop_for_non_leader(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(endpoint="calibration-provider")
+        out = ctx.run(
+            ctx.on.relation_changed(rel),
+            self._state("secret-in-relation", leader=False, relations=[rel]),
+        )
+        assert "password" not in out.get_relation(rel.id).local_app_data
+
+    def test_none_mode_leaves_no_plaintext_in_relation(self):
+        # Control: a compliant leader writes no secret material to the databag.
+        ctx = ops.testing.Context(NormaK8sCharm)
+        rel = ops.testing.Relation(endpoint="calibration-provider")
+        out = ctx.run(
+            ctx.on.relation_changed(rel),
+            self._state("none", leader=True, relations=[rel]),
+        )
+        assert "password" not in out.get_relation(rel.id).local_app_data
+
+
 class TestStatusReporting:
     """Verify status reporting (US4)."""
 
