@@ -33,7 +33,11 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version: "1.22"
+          # Single source of truth: read the version straight from go.mod so a
+          # Dependabot bump to the `go` directive can't drift from the toolchain
+          # CI installs (go.mod already requires >= 1.23.0). Avoids relying on
+          # Go's auto-toolchain download to silently paper over a stale pin.
+          go-version-file: workload/go.mod
           cache-dependency-path: workload/go.sum
       - name: Build
         working-directory: workload

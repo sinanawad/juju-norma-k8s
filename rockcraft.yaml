@@ -54,7 +54,10 @@ parts:
     plugin: go
     source: workload/
     build-snaps:
-      - go/1.22/stable
+      # Match workload/go.mod's `go` directive (>= 1.23.0). With go/1.22 the
+      # build only succeeded via Go's auto-toolchain download of 1.23 at pack
+      # time — fragile and slow; pin the matching snap channel instead.
+      - go/1.23/stable
     build-environment:
       - CGO_ENABLED: "0"
       - GOFLAGS: "-trimpath"
