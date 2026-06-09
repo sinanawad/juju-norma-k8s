@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import secrets
+import time
 
 import ops
 from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
@@ -955,8 +956,19 @@ class NormaK8sCharm(ops.CharmBase):
         # --- Signal operation (FR-028) ---
         def op_send_signal():
             container.send_signal("SIGHUP", service_name)
-            svc = container.get_service(service_name)
-            assert svc.is_running(), "Service should survive SIGHUP"
+            # norma installs no SIGHUP handler, so the signal terminates the
+            # process and Pebble restarts it. Reading is_running() once here
+            # races that restart window (the check sometimes wins before the
+            # process has exited, sometimes loses mid-restart -> intermittent
+            # CI flake). Poll for the service to be running again so the op is
+            # deterministic. This is an operator-invoked action, not the
+            # reconciler, so a short bounded wait is acceptable.
+            for _ in range(20):  # ~10s
+                if container.get_service(service_name).is_running():
+                    break
+                time.sleep(0.5)
+            else:
+                raise AssertionError("service not running ~10s after SIGHUP")
 
         _run_op("send-signal", op_send_signal)
 
