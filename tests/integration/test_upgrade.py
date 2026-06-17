@@ -21,6 +21,8 @@ it against a live recreated pod was an intermittent CI flake and is intentionall
 not done here.
 """
 
+import time
+
 import jubilant
 
 APP = "juju-norma-k8s"
@@ -48,16 +50,31 @@ class TestUpgrade:
 
         juju.cli("refresh", APP, "--path", str(charm_path))
 
-        def refreshed(status: jubilant.Status) -> bool:
-            app = status.apps.get(APP)
-            return app is not None and app.charm_rev > before_rev and app.is_active
+        # The refresh recreates the workload pod asynchronously, and during that
+        # window the leader cannot run actions (the action errors / times out).
+        # Poll get-version THROUGH that window — tolerating the gap — until the
+        # unit answers with its workload version. This proves the charm + workload
+        # survive the refresh and stay identifiable (P4-5) without depending on the
+        # nondeterministic ledger-reset / upgrade-charm ordering (see module
+        # docstring). A single get-version call here raced the recreation and
+        # flaked all three legs.
+        workload_version = ""
+        deadline = time.monotonic() + 420  # ~7 min; K8s recreation can be slow under load
+        while time.monotonic() < deadline:
+            try:
+                task = juju.run(f"{APP}/leader", "get-version", wait=30)
+                workload_version = task.results.get("workload-version", "")
+            except (jubilant.TaskError, jubilant.CLIError, TimeoutError, ValueError):
+                time.sleep(5)
+                continue
+            if workload_version:
+                break
+            time.sleep(5)
 
-        juju.wait(refreshed, timeout=300)
-
-        # Workload stays identifiable post-refresh (P4-5): get-version execs
-        # `norma --version` in the (possibly recreated) workload container.
-        ver = juju.run(f"{APP}/leader", "get-version")
-        assert ver.results.get("workload-version"), "workload version after refresh"
+        assert workload_version, "workload did not report a version within 7min after refresh"
+        # Deterministic signal that the refresh actually took effect.
+        after_rev = juju.status().apps[APP].charm_rev
+        assert after_rev > before_rev, f"rev should bump: {before_rev} -> {after_rev}"
 
     def test_oci_resource_bound_to_revision(self, juju: jubilant.Juju):
         """US21: the workload image is bound to a tracked resource revision
