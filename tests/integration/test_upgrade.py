@@ -1,17 +1,26 @@
 """Integration tests for US15: Upgrade (charm refresh).
 
-Live-verified behaviour (Juju 4.0.12 K8s, 2026-06-04): `juju refresh` to a new
-revision RECREATES the workload pod, which resets the charm's in-memory event
-ledger. The fresh unit then dispatches `upgrade-charm` as its first lifecycle
-hook (upgrade-charm -> config-changed -> start -> pebble-ready), and never
-`install` (install only fires on the original deploy). So we assert the
-post-refresh ledger *starts with* upgrade-charm and carries no `install`, rather
-than a count delta — the pre-refresh pod already carries its own upgrade-charm.
-This pod-recreation-resets-ephemeral-state behaviour is exactly why the charm
-keeps no StoredState (constitution) and is a key K8s-vs-machine distinction.
+Live investigation (Juju 4.0.12 K8s, 2026-06-17) of what `juju refresh` to a
+rebuilt local charm actually does, observed over repeated cycles:
+
+- The charm REVISION always bumps (local-charm refresh increments every time).
+  This is the one deterministic signal that the refresh took effect.
+- The workload pod is recreated, which resets the charm's ephemeral /tmp event
+  ledger — BUT this is nondeterministic to observe:
+    * timing varies (seconds locally, sometimes minutes under CI load), and
+    * the recreated pod's reset ledger sometimes begins with `upgrade-charm`
+      and sometimes with `start` — the `upgrade-charm` hook can be dispatched
+      to the *terminating old pod*, so it is not reliably present on the new
+      pod's fresh ledger.
+
+So this suite asserts only the deterministic facts (revision bump + the charm
+reconciling back to active + workload version still reported). That the charm
+RECORDS `upgrade-charm` on the upgrade is covered deterministically by the unit
+suite (test_charm.py::TestUpgrade::test_upgrade_charm_fires_reconcile); asserting
+it against a live recreated pod was an intermittent CI flake and is intentionally
+not done here.
 """
 
-import json
 import time
 
 import jubilant
@@ -19,20 +28,8 @@ import jubilant
 APP = "juju-norma-k8s"
 
 
-def _ledger(juju: jubilant.Juju) -> list[dict]:
-    """Return the charm's in-memory event ledger (newest deploy/refresh)."""
-    task = juju.run(f"{APP}/leader", "get-event-log")
-    return json.loads(task.results["events"])
-
-
-def _charm_rev(juju: jubilant.Juju) -> int:
-    """Current charm revision, read straight from `juju status` JSON."""
-    data = json.loads(juju.cli("status", "--format", "json"))
-    return int(data["applications"][APP]["charm-rev"])
-
-
 class TestUpgrade:
-    """US15: Charm refresh, pod recreation, and version reporting."""
+    """US15: Charm refresh and version reporting."""
 
     def test_get_version(self, juju: jubilant.Juju):
         task = juju.run(f"{APP}/leader", "get-version")
@@ -40,58 +37,44 @@ class TestUpgrade:
         assert task.results.get("charm-version"), "Charm version should be set"
         assert task.results.get("workload-version"), "Workload version should be set"
 
-    def test_refresh_recreates_pod_and_fires_upgrade_charm(self, juju: jubilant.Juju, charm_path):
-        """`juju refresh` to a new revision recreates the K8s pod and dispatches
-        upgrade-charm as the first hook of the fresh unit (US15)."""
-        before_rev = _charm_rev(juju)
+    def test_refresh_bumps_revision_and_charm_survives(self, juju: jubilant.Juju, charm_path):
+        """`juju refresh` to the rebuilt local charm bumps the charm revision and
+        the charm reconciles back to active with its workload version still
+        reported (US15 + P4-5 image distinguishability survives a refresh).
+
+        The revision bump is the deterministic "refresh took effect" signal; the
+        K8s pod recreation it triggers is real but nondeterministic to observe
+        (see module docstring), so it is not asserted here.
+        """
+        before_rev = juju.status().apps[APP].charm_rev
 
         juju.cli("refresh", APP, "--path", str(charm_path))
 
-        # K8s pod recreation is slow; poll for the fresh (reset) ledger: it
-        # begins with upgrade-charm and — unlike the original deploy — carries
-        # no `install`. Detecting the reset this way is robust to whatever the
-        # pre-refresh ledger held.
-        names: list[str] = []
-        for _ in range(72):  # up to ~6 min
+        # The refresh recreates the workload pod asynchronously, and during that
+        # window the leader cannot run actions (the action errors / times out).
+        # Poll get-version THROUGH that window — tolerating the gap — until the
+        # unit answers with its workload version. This proves the charm + workload
+        # survive the refresh and stay identifiable (P4-5) without depending on the
+        # nondeterministic ledger-reset / upgrade-charm ordering (see module
+        # docstring). A single get-version call here raced the recreation and
+        # flaked all three legs.
+        workload_version = ""
+        deadline = time.monotonic() + 420  # ~7 min; K8s recreation can be slow under load
+        while time.monotonic() < deadline:
             try:
-                names = [e["event_name"] for e in _ledger(juju)]
-            except (
-                jubilant.TaskError,
-                jubilant.CLIError,
-                jubilant.WaitError,
-                TimeoutError,
-                ValueError,
-            ):
-                # The get-event-log action is unavailable while the pod is being
-                # recreated (the whole point of the refresh). jubilant surfaces
-                # that as any of these (incl. ValueError "error running action"),
-                # so tolerate them all and keep polling until the fresh unit answers.
+                task = juju.run(f"{APP}/leader", "get-version", wait=30)
+                workload_version = task.results.get("workload-version", "")
+            except (jubilant.TaskError, jubilant.CLIError, TimeoutError, ValueError):
                 time.sleep(5)
                 continue
-            # Require pebble-ready too: it fires just after `start`, so breaking
-            # on upgrade-charm alone can snapshot the ledger mid-lifecycle
-            # (['upgrade-charm','config-changed','start']) before pebble-ready.
-            if (
-                names
-                and names[0] == "upgrade-charm"
-                and "install" not in names
-                and "pebble-ready" in names
-            ):
+            if workload_version:
                 break
             time.sleep(5)
-        else:
-            raise AssertionError(
-                f"refresh did not dispatch upgrade-charm on a recreated pod; final ledger={names}"
-            )
 
-        assert names[0] == "upgrade-charm", f"expected upgrade-charm first, got {names}"
-        # The recreated unit runs the full lifecycle behind upgrade-charm.
-        assert "config-changed" in names, names
-        assert "pebble-ready" in names, names
-        # Revision bumped and the workload stays identifiable post-refresh (P4-5).
-        assert _charm_rev(juju) > before_rev, "charm revision should bump on refresh"
-        ver = juju.run(f"{APP}/leader", "get-version")
-        assert ver.results.get("workload-version"), "workload version after refresh"
+        assert workload_version, "workload did not report a version within 7min after refresh"
+        # Deterministic signal that the refresh actually took effect.
+        after_rev = juju.status().apps[APP].charm_rev
+        assert after_rev > before_rev, f"rev should bump: {before_rev} -> {after_rev}"
 
     def test_oci_resource_bound_to_revision(self, juju: jubilant.Juju):
         """US21: the workload image is bound to a tracked resource revision
