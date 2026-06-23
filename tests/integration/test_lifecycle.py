@@ -7,7 +7,7 @@ import time
 import jubilant
 import pytest
 
-from .conftest import JUJU_4, kubectl
+from .conftest import JUJU_4, JUJU_EDGE, kubectl
 
 APP = "juju-norma-k8s"
 
@@ -251,14 +251,16 @@ class TestDeployConstraints:
             _remove_app(juju, app)
 
     @pytest.mark.xfail(
-        JUJU_4,
+        JUJU_4 and not JUJU_EDGE,
         strict=True,
         reason=(
-            "3.6->4.0 REGRESSION (caught by xfail_strict): Juju 3.6 applies `mem` "
-            "to the K8s workload container, but 4.0.12 accepts the constraint and "
-            "drops it on the sidecar path (application.go `// TODO ... Constraints`). "
-            "Positive assertion on 3.6 (works); strict xfail on 4.0 — flips to a "
-            "loud failure when 4.0 re-wires ApplyWorkloadConstraints for sidecars."
+            "3.6->4.0 mem-constraint regression #22650 (caught by xfail_strict): "
+            "Juju 3.6 applies `mem` to the K8s workload container; 4.0/stable accepts "
+            "the constraint and drops it on the sidecar path. FIXED on 4.0/edge "
+            "(~2026-06-23 the value now reaches the pod), so the xfail is narrowed to "
+            "4.0/stable — it flips to a loud XPASS when stable also ships the fix, "
+            "signalling it's time to drop this marker. Positive assertion on 3.6 and "
+            "4.0/edge."
         ),
     )
     def test_mem_constraint_reaches_workload_pod(self, juju: jubilant.Juju, charm_path, oci_image):
