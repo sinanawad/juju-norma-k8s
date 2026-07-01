@@ -9,9 +9,11 @@ Pebble scopes notices by owner uid, so a notice created by a **non-root workload
 ``trigger-notice`` therefore has two modes:
   * ``via=api`` (default) — the charm records the notice through its own Pebble
     client (agent uid), so the event IS dispatched (``test_notice_event_dispatched``).
-  * ``via=workload`` — recorded from inside the workload container (workload uid),
-    which Juju does NOT deliver today (``test_workload_uid_notice_not_dispatched``,
-    an xfail sentinel that flips when juju/juju adds ``NoticesUsersAll``).
+  * ``via=workload`` — recorded from inside the workload container (workload uid).
+    Fixed on 3.6.25 (juju/juju ``08a5da6e9b`` added ``Users: NoticesUsersAll`` to
+    the noticer) so 3.6 delivers it; 4.0.x has not yet received the fix, so
+    ``test_workload_uid_notice_not_dispatched`` is a strict-xfail sentinel on
+    JUJU_4 that flips to XPASS when the fix forward-ports to 4.0.
 """
 
 import json
@@ -66,17 +68,24 @@ class TestNotices:
         )
 
     @pytest.mark.xfail(
+        JUJU_4,
         strict=True,
         reason=(
-            "Juju <=4.0.12 uniter pebbleNoticer (pebblenotices.go) omits "
-            "Users: NoticesUsersAll, so notices owned by the non-root workload "
-            "uid are not delivered. This asserts the FIXED behaviour; it flips "
-            "to XPASS when juju/juju adds the all-users filter."
+            "Non-root workload-uid notices: the uniter pebbleNoticer "
+            "(pebblenotices.go) queried Pebble without Users: NoticesUsersAll, so "
+            "notices owned by the workload uid were invisible to the noticer and "
+            "never dispatched. FIXED on 3.6 by juju/juju 08a5da6e9b ('fix(uniter): "
+            "include non-root user notices in pebbleNoticer polling', shipped "
+            "3.6.25) — so 3.6/stable now dispatches them (positive assertion). 4.0 "
+            "has NOT yet received the fix (4.0.x still omits Users:all), so the "
+            "sentinel stays a strict-xfail there; it flips to a loud XPASS when the "
+            "fix forward-ports to 4.0, signalling it's time to drop this marker."
         ),
     )
     def test_workload_uid_notice_not_dispatched(self, juju: jubilant.Juju):
         """Sentinel: a notice recorded from inside the workload container
-        (workload uid, via=workload) is NOT delivered on current Juju."""
+        (workload uid, via=workload). Delivered on 3.6.25+ (fixed); NOT delivered
+        on 4.0.x (still omits Users: NoticesUsersAll) — hence the JUJU_4 xfail."""
         key = f"norma.dev/workload-{uuid.uuid4().hex[:8]}"
         task = juju.run(f"{APP}/leader", "trigger-notice", params={"key": key, "via": "workload"})
         assert task.success
