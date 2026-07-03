@@ -115,7 +115,7 @@ jobs:
       - name: Attest build provenance (charms)
         # Signed SLSA provenance for both .charm artifacts; verify with
         # `gh attestation verify <file> --owner <owner>`.
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             juju-norma-k8s_amd64.charm
