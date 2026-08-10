@@ -206,5 +206,35 @@ jobs:
         with:
           name: ${{ steps.report.outputs.name }}
           path: report.xml
-          if-no-files-found: warn
+          # `error`, not `warn`: a leg that produced no report has NOT passed, and
+          # a silently-missing report is exactly how a red matrix reads as green.
+          if-no-files-found: error
+
+  # Deliver the nightly verdict. Producing the per-channel pass/fail record is
+  # not the same as delivering it: the matrix ran red for 42 consecutive nights
+  # (2026-06-30 -> 2026-08-10) with nobody told, and both causes were upstream-fix
+  # signals the sentinels raised on purpose. Scheduled runs only — a human who
+  # dispatches a matrix by hand is already watching it.
+  #
+  # Deliberately quiet: ONE reused issue per red streak, body rewritten nightly,
+  # a comment only when the set of failing tests actually changes.
+  nightly-verdict:
+    name: Nightly verdict
+    runs-on: ubuntu-24.04
+    needs: [integration]
+    if: always() && github.event_name == 'schedule'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download test reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: test-report-*
+          path: artifacts
+      - name: Report verdict
+        run: python3 scripts/nightly_verdict.py artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
