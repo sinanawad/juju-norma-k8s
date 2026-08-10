@@ -1904,43 +1904,49 @@ class TestSecrets:
         out_secret = out.get_secret(label="calibration-password")
         assert out_secret.latest_content["password"] != "old-password"
 
-    def test_secret_expired_removes_revision(self):
-        """AC4: secret-expired removes the expired revision."""
-        ctx = ops.testing.Context(NormaK8sCharm)
+    @staticmethod
+    def _state_with_obsolete_revision(ctx):
+        """Drive the charm to a state where secret revision 2 is obsolete.
+
+        ``ops.testing.Secret`` always starts at tracked == latest == 1, and ops
+        refuses to remove the tracked or the latest revision. Rotating twice (each
+        rotation calls ``set_content``, minting a new revision) leaves revisions
+        1, 2 and 3 with tracked=1 and latest=3 — so revision 2 is genuinely
+        obsolete, which is exactly the revision Juju fires secret-expired /
+        secret-remove for.
+        """
         secret = ops.testing.Secret(
-            {"password": "current"},
-            latest_content={"password": "latest"},
+            {"password": "v1"},
             owner="app",
             label="calibration-password",
-            _tracked_revision=2,
-            _latest_revision=3,
+            rotate=ops.SecretRotate.MONTHLY,
         )
         state = ops.testing.State(
             containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
             secrets=[secret],
             leader=True,
         )
-        ctx.run(ctx.on.secret_expired(secret, revision=1), state)
-        assert 1 in ctx.removed_secret_revisions
+        for _ in range(2):
+            state = ctx.run(
+                ctx.on.secret_rotate(state.get_secret(label="calibration-password")), state
+            )
+        return state
+
+    def test_secret_expired_removes_revision(self):
+        """AC4: secret-expired removes the expired revision."""
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = self._state_with_obsolete_revision(ctx)
+        secret = state.get_secret(label="calibration-password")
+        ctx.run(ctx.on.secret_expired(secret, revision=2), state)
+        assert 2 in ctx.removed_secret_revisions
 
     def test_secret_remove_cleans_obsolete_revision(self):
         """AC7: secret-remove removes obsolete revision."""
         ctx = ops.testing.Context(NormaK8sCharm)
-        secret = ops.testing.Secret(
-            {"password": "current"},
-            latest_content={"password": "latest"},
-            owner="app",
-            label="calibration-password",
-            _tracked_revision=2,
-            _latest_revision=3,
-        )
-        state = ops.testing.State(
-            containers=[NORMA_CONTAINER_DISCONNECTED, NORMA_SECONDARY],
-            secrets=[secret],
-            leader=True,
-        )
-        ctx.run(ctx.on.secret_remove(secret, revision=1), state)
-        assert 1 in ctx.removed_secret_revisions
+        state = self._state_with_obsolete_revision(ctx)
+        secret = state.get_secret(label="calibration-password")
+        ctx.run(ctx.on.secret_remove(secret, revision=2), state)
+        assert 2 in ctx.removed_secret_revisions
 
     def test_get_secret_info_returns_metadata(self):
         """AC1: get-secret-info returns secret-id, has-content, rotation."""
