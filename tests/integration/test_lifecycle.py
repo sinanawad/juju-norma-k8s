@@ -7,7 +7,7 @@ import time
 import jubilant
 import pytest
 
-from .conftest import JUJU_4, JUJU_EDGE, kubectl
+from .conftest import kubectl
 
 APP = "juju-norma-k8s"
 
@@ -203,12 +203,10 @@ def _remove_app(juju: jubilant.Juju, app: str) -> None:
 class TestDeployConstraints:
     """P2-2 / FR-037: K8s constraint accept/reject + pod-spec application.
 
-    Live-verified (4.0.12 K8s, 2026-06-04): the K8s provider REJECTS `cores`
-    at the deploy precheck ("constraints cores not supported"), while `mem` and
-    `cpu-power` are ACCEPTED. But `mem` is not (yet) applied to the sidecar
-    workload container's resources — application.go carries a `// TODO: ...
-    Constraints ...` for that path — so the pod-spec assertion is a strict-xfail
-    sentinel that flips when Juju wires it.
+    Live-verified (4.0.12 K8s): the K8s provider REJECTS `cores` at the deploy
+    precheck ("constraints cores not supported"), while `mem` and `cpu-power` are
+    ACCEPTED. `mem` reaches the sidecar workload container's resources on 3.6 and
+    on 4.0 from 4.0.12 (regression #22650 fixed by juju/juju bcf9170760).
     """
 
     def test_cores_constraint_rejected_on_k8s(self, juju: jubilant.Juju, charm_path, oci_image):
@@ -250,22 +248,17 @@ class TestDeployConstraints:
         finally:
             _remove_app(juju, app)
 
-    @pytest.mark.xfail(
-        JUJU_4 and not JUJU_EDGE,
-        strict=True,
-        reason=(
-            "3.6->4.0 mem-constraint regression #22650 (caught by xfail_strict): "
-            "Juju 3.6 applies `mem` to the K8s workload container; 4.0/stable accepts "
-            "the constraint and drops it on the sidecar path. FIXED on 4.0/edge "
-            "(~2026-06-23 the value now reaches the pod), so the xfail is narrowed to "
-            "4.0/stable — it flips to a loud XPASS when stable also ships the fix, "
-            "signalling it's time to drop this marker. Positive assertion on 3.6 and "
-            "4.0/edge."
-        ),
-    )
     def test_mem_constraint_reaches_workload_pod(self, juju: jubilant.Juju, charm_path, oci_image):
-        """`mem` should set the workload container's memory request/limit
-        (works on 3.6; regressed on 4.0.12 — see the conditional xfail)."""
+        """`mem` must set the workload container's memory request/limit.
+
+        This carried a strict-xfail sentinel for the 3.6->4.0 mem-constraint
+        regression #22650 (4.0 accepted the constraint then dropped it on the
+        sidecar path). Fixed upstream by juju/juju bcf9170760 ("fix: preserve app
+        constraints without model defaults"), released in 4.0.12 — the sentinel
+        XPASSed on the 4.0/stable leg once that reached the stable channel, so the
+        marker is retired and this is now a plain positive regression test on all
+        channels.
+        """
         probe = kubectl("version", "--client")
         if probe is None or probe.returncode != 0:
             pytest.skip("kubectl (microk8s) unavailable")

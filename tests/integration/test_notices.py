@@ -1,19 +1,19 @@
 """Integration tests for US13: Pebble Custom Notices.
 
-Verified live on Juju 4.0.12 (2026-06-04): Juju DOES dispatch the
-``pebble-custom-notice`` event, but ONLY for notices owned by the **agent uid**
-(``juju``). The uniter's pebbleNoticer queries Pebble without ``Users: all``, and
-Pebble scopes notices by owner uid, so a notice created by a **non-root workload**
-(this charm's ``_daemon_`` uid) is invisible to the noticer and never dispatched.
+Juju dispatches the ``pebble-custom-notice`` event, but historically only for
+notices owned by the **agent uid** (``juju``): the uniter's pebbleNoticer queried
+Pebble without ``Users: all``, and Pebble scopes notices by owner uid, so a notice
+created by a **non-root workload** (this charm's ``_daemon_`` uid) was invisible
+to the noticer and never dispatched.
 
 ``trigger-notice`` therefore has two modes:
   * ``via=api`` (default) — the charm records the notice through its own Pebble
     client (agent uid), so the event IS dispatched (``test_notice_event_dispatched``).
   * ``via=workload`` — recorded from inside the workload container (workload uid).
-    Fixed on 3.6.25 (juju/juju ``08a5da6e9b`` added ``Users: NoticesUsersAll`` to
-    the noticer) so 3.6 delivers it; 4.0.x has not yet received the fix, so
-    ``test_workload_uid_notice_not_dispatched`` is a strict-xfail sentinel on
-    JUJU_4 that flips to XPASS when the fix forward-ports to 4.0.
+    Fixed by juju/juju ``08a5da6e9b`` (adds ``Users: NoticesUsersAll``), which
+    shipped in **3.6.25** and forward-ported to 4.0 in **4.0.13**. So 3.6/stable
+    and 4.0/edge deliver it; 4.0/stable (4.0.12) does not yet, which is why
+    ``test_workload_uid_notice_dispatched`` keeps a strict-xfail sentinel there.
 """
 
 import json
@@ -23,7 +23,7 @@ import uuid
 import jubilant
 import pytest
 
-from .conftest import JUJU_4
+from .conftest import JUJU_4, JUJU_EDGE
 
 APP = "juju-norma-k8s"
 
@@ -68,28 +68,29 @@ class TestNotices:
         )
 
     @pytest.mark.xfail(
-        JUJU_4,
+        JUJU_4 and not JUJU_EDGE,
         strict=True,
         reason=(
             "Non-root workload-uid notices: the uniter pebbleNoticer "
             "(pebblenotices.go) queried Pebble without Users: NoticesUsersAll, so "
             "notices owned by the workload uid were invisible to the noticer and "
-            "never dispatched. FIXED on 3.6 by juju/juju 08a5da6e9b ('fix(uniter): "
-            "include non-root user notices in pebbleNoticer polling', shipped "
-            "3.6.25) — so 3.6/stable now dispatches them (positive assertion). 4.0 "
-            "has NOT yet received the fix (4.0.x still omits Users:all), so the "
-            "sentinel stays a strict-xfail there; it flips to a loud XPASS when the "
-            "fix forward-ports to 4.0, signalling it's time to drop this marker."
+            "never dispatched. FIXED by juju/juju 08a5da6e9b ('fix(uniter): include "
+            "non-root user notices in pebbleNoticer polling'), which shipped in "
+            "3.6.25 and forward-ported to 4.0 in 4.0.13 — so 3.6/stable and "
+            "4.0/edge dispatch them (positive assertion). 4.0/stable is still on "
+            "4.0.12 (no fix), so the sentinel stays a strict-xfail there; it flips "
+            "to a loud XPASS once stable ships 4.0.13+, signalling it's time to "
+            "drop this marker entirely."
         ),
     )
-    def test_workload_uid_notice_not_dispatched(self, juju: jubilant.Juju):
-        """Sentinel: a notice recorded from inside the workload container
-        (workload uid, via=workload). Delivered on 3.6.25+ (fixed); NOT delivered
-        on 4.0.x (still omits Users: NoticesUsersAll) — hence the JUJU_4 xfail."""
+    def test_workload_uid_notice_dispatched(self, juju: jubilant.Juju):
+        """A notice recorded from inside the workload container (workload uid,
+        via=workload) is delivered. Holds on 3.6.25+ and 4.0.13+; still xfails on
+        4.0/stable (4.0.12), which predates the forward-port."""
         key = f"norma.dev/workload-{uuid.uuid4().hex[:8]}"
         task = juju.run(f"{APP}/leader", "trigger-notice", params={"key": key, "via": "workload"})
         assert task.success
         assert _dispatched(juju, key), (
-            f"workload-uid notice {key} was dispatched — Juju appears to have "
-            "fixed the noticer (add Users:all). Promote this to a positive test."
+            f"workload-uid notice {key} was NOT dispatched — expected delivery on "
+            "juju with the pebbleNoticer Users:all fix (3.6.25+, 4.0.13+)."
         )
