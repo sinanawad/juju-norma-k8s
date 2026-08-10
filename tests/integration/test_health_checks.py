@@ -23,8 +23,11 @@ def _scrape_norma_healthy(juju: jubilant.Juju) -> str:
     if probe is None or probe.returncode != 0:
         pytest.skip("kubectl (microk8s) unavailable")
 
-    raw = juju.cli("config", APP, "calibration-int", "--format=json")
-    port = json.loads(raw).get("value", 8080)
+    # jubilant's typed accessor, not `juju config --format=json`: for an
+    # APPLICATION that returns the bare scalar, not the {"value": ...} envelope
+    # `juju model-config` returns — a difference that cost this test a full
+    # matrix run.
+    port = juju.config(APP).get("calibration-int", 8080)
     ns = juju.model.split(":")[-1]
     out = kubectl(
         "exec",
