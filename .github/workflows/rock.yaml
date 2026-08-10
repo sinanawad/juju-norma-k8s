@@ -42,6 +42,13 @@ jobs:
       - name: Build
         working-directory: workload
         run: CGO_ENABLED=0 go build -o norma ./...
+      - name: Vet
+        working-directory: workload
+        run: go vet ./...
       - name: Test
         working-directory: workload
-        run: go test -v ./...
+        # -race because health is read concurrently (HTTP handlers + Prometheus
+        # scrape). -count=1 defeats the test cache so a green here always means
+        # the tests actually ran — this job passed vacuously for months while
+        # workload/ contained no test files at all.
+        run: go test -race -count=1 -v ./...

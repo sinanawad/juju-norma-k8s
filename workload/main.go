@@ -21,14 +21,24 @@ import (
 // version is set at build time via ldflags: -X main.version=X.Y.Z
 var version = "dev"
 
-// healthy tracks the in-memory health state. It is toggled atomically via
-// POST /toggle-health. Starts as true (healthy).
-var healthy atomic.Bool
-
 // healthFlagFile is the path to the flag file whose existence indicates
 // unhealthy state. Defaults to /tmp/norma-unhealthy; overridden by the
 // HEALTH_FLAG_FILE environment variable.
+//
+// The flag file is the SINGLE source of truth for health. It used to be ANDed
+// with an in-memory atomic bool, which wedged the workload permanently
+// unhealthy: POST /toggle-health flipped both signals in opposite directions,
+// so once they desynchronised the AND could never be true again. That state was
+// reachable two ways in normal operation — the charm's toggle-health action
+// writes this file directly (never touching the bool), and a pod restart with
+// the file present starts the process desynchronised. A file is also the only
+// signal that survives a restart and is visible to both the charm and the
+// workload, so it is the correct one to keep.
 var healthFlagFile string
+
+// lastObservedHealthy backs the sampled transition counter: -1 = not yet
+// observed, 0 = unhealthy, 1 = healthy.
+var lastObservedHealthy atomic.Int32
 
 // ---------- Prometheus metrics ----------
 
@@ -41,22 +51,39 @@ var (
 		[]string{"method", "path", "status"},
 	)
 
+	// Sampled, not exact: health can change out-of-process (the charm's
+	// toggle-health action writes the flag file directly), so transitions are
+	// counted when observed — on scrape and on POST /toggle-health. Two flips
+	// between observations therefore count as none. Exactness would require
+	// watching the file, which is not worth an inotify dependency here.
 	healthTogglesTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "norma_health_toggles_total",
-			Help: "Total number of health state toggles.",
+			Help: "Observed health state transitions (sampled at scrape and on toggle).",
 		},
 	)
 
-	healthyGauge = prometheus.NewGauge(
+	// GaugeFunc, not Gauge: evaluated at scrape time, so it reflects health
+	// however it was changed. A plain Gauge was only ever Set() from main() and
+	// the HTTP toggle handler, which meant the charm's toggle-health action (a
+	// direct flag-file write over Pebble) never moved it — and the shipped alert
+	// `norma_healthy == 0` could therefore never fire.
+	healthyGauge = prometheus.NewGaugeFunc(
 		prometheus.GaugeOpts{
 			Name: "norma_healthy",
 			Help: "Whether the workload considers itself healthy (1) or not (0).",
+		},
+		func() float64 {
+			if observeHealth() {
+				return 1
+			}
+			return 0
 		},
 	)
 )
 
 func init() {
+	lastObservedHealthy.Store(-1) // "not yet observed" — avoids a bogus first transition
 	prometheus.MustRegister(httpRequestsTotal)
 	prometheus.MustRegister(healthTogglesTotal)
 	prometheus.MustRegister(healthyGauge)
@@ -65,9 +92,7 @@ func init() {
 // ---------- HTTP handlers ----------
 
 // handleHealth returns 200 "OK" when healthy, 500 "UNHEALTHY" otherwise.
-// Health is determined by two conditions (both must be satisfied for healthy):
-//  1. The atomic bool must be true.
-//  2. The health flag file must NOT exist.
+// Healthy means the health flag file does not exist — see healthFlagFile.
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	if isHealthy() {
 		w.WriteHeader(http.StatusOK)
@@ -91,30 +116,16 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "READY")
 }
 
-// handleToggleHealth atomically flips the in-memory health bool AND toggles
-// the flag file (create if absent, remove if present). Returns JSON with the
-// previous and current health states.
+// handleToggleHealth toggles the health flag file (create if absent, remove if
+// present) and returns JSON with the previous and current health states.
+//
+// It deliberately drives the SAME signal the charm's toggle-health action
+// drives, so the two paths agree and either can undo the other. The gauge needs
+// no update here: it is a GaugeFunc evaluated at scrape time.
 func handleToggleHealth(w http.ResponseWriter, r *http.Request) {
-	// Determine previous state from both signals.
 	prevHealthy := isHealthy()
-
-	// Flip the atomic bool.
-	// Load current value, store the opposite.
-	oldBool := healthy.Load()
-	healthy.Store(!oldBool)
-
-	// Toggle the flag file.
 	toggleFlagFile()
-
-	healthTogglesTotal.Inc()
-
-	// Update the gauge based on the new combined state.
-	nowHealthy := isHealthy()
-	if nowHealthy {
-		healthyGauge.Set(1)
-	} else {
-		healthyGauge.Set(0)
-	}
+	nowHealthy := observeHealth() // records the transition we just caused
 
 	prev := healthString(prevHealthy)
 	cur := healthString(nowHealthy)
@@ -129,16 +140,26 @@ func handleToggleHealth(w http.ResponseWriter, r *http.Request) {
 
 // ---------- helpers ----------
 
-// isHealthy returns true only if the atomic bool is true AND the flag file
-// does not exist.
+// isHealthy reports health from the single source of truth: the workload is
+// healthy exactly when the flag file does not exist. Pure — no side effects.
 func isHealthy() bool {
-	if !healthy.Load() {
-		return false
+	return !flagFileExists()
+}
+
+// observeHealth reads health and records a transition against the previous
+// observation. Used where sampling is meaningful (scrape, toggle) so that
+// out-of-process changes — the charm writing the flag file over Pebble — are
+// still counted. See healthTogglesTotal for the sampling caveat.
+func observeHealth() bool {
+	h := isHealthy()
+	var cur int32
+	if h {
+		cur = 1
 	}
-	if flagFileExists() {
-		return false
+	if prev := lastObservedHealthy.Swap(cur); prev >= 0 && prev != cur {
+		healthTogglesTotal.Inc()
 	}
-	return true
+	return h
 }
 
 // flagFileExists returns true if the health flag file exists on disk.
@@ -239,13 +260,9 @@ func main() {
 		return // unreachable; runCheck calls os.Exit
 	}
 
-	// Initialise health state: healthy unless the flag file already exists.
-	healthy.Store(true)
-	if isHealthy() {
-		healthyGauge.Set(1)
-	} else {
-		healthyGauge.Set(0)
-	}
+	// No health state to initialise: the flag file IS the state, so the workload
+	// comes up matching whatever the charm last set — including across a pod
+	// restart, which the previous in-memory bool got wrong.
 
 	// Build the mux using Go 1.22+ method-pattern routing.
 	mux := http.NewServeMux()
