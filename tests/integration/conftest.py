@@ -120,9 +120,12 @@ def _detect_juju_major_version() -> int:
 
 JUJU_MAJOR = _detect_juju_major_version()
 JUJU_4 = JUJU_MAJOR >= 4
-# 4.0/edge ships fixes ahead of 4.0/stable (e.g. the K8s mem-constraint regression
-# #22650, fixed on edge ~2026-06-23 but not yet on stable). Channel-aware so
-# version-delta xfails can target only the channel that still carries the bug.
+# 4.0/edge ships fixes ahead of 4.0/stable, so a bug can be live on one 4.0
+# channel and fixed on the other. Currently UNUSED: it exists because a
+# strict-xfail sentinel that must target only the channel still carrying the bug
+# needs it, and this suite has needed that twice (the #22650 mem-constraint
+# regression, and non-root pebble-notice dispatch) — both since retired, having
+# reached every channel. Keep for the next one.
 JUJU_CHANNEL = os.environ.get("JUJU_CHANNEL", "")
 JUJU_EDGE = "edge" in JUJU_CHANNEL
 
