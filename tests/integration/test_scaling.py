@@ -12,6 +12,38 @@ from .conftest import kubectl
 APP = "juju-norma-k8s"
 
 
+def _wait_peer_convergence(juju: jubilant.Juju, expected: int, timeout: int = 180) -> dict:
+    """Poll get-cluster-info until peer membership reaches ``expected`` units.
+
+    ``unit-count`` is ``1 (self) + len(peer.units)`` (src/charm.py:806-808), i.e.
+    **peer-relation membership**, which lags unit *activity*: a unit reaches
+    ``active`` before the leader has necessarily observed its relation-joined.
+    Asserting immediately after ``wait(all active)`` therefore races, and did —
+    ``unit-count`` came back "2" instead of "3" on three separate nightlies
+    (2026-08-18 on 4.0/stable, 2026-08-29 and 2026-09-02 on 4.0/edge).
+
+    Polling keeps the assertion strong — convergence is still required, and a
+    genuine failure to converge still fails — while making the lag an observed
+    property rather than an assumed-instant one. The scale-down sibling already
+    documented this lag; the scale-up path had not accounted for it.
+
+    Returns the converged action results, so callers can assert on them.
+    """
+    deadline = time.monotonic() + timeout
+    last = ""
+    while time.monotonic() < deadline:
+        task = juju.run(f"{APP}/leader", "get-cluster-info")
+        assert task.success
+        last = task.results["unit-count"]
+        if last == str(expected):
+            return task.results
+        time.sleep(5)
+    raise AssertionError(
+        f"peer membership did not converge to {expected} units within {timeout}s "
+        f"(last unit-count={last!r}) — the leader never observed all peers joining"
+    )
+
+
 class TestScaling:
     """US8: Scale up and down, verify cluster info."""
 
@@ -29,11 +61,14 @@ class TestScaling:
         assert len(status.apps[APP].units) == 3
 
     def test_cluster_info_reflects_scale(self, juju: jubilant.Juju):
-        task = juju.run(f"{APP}/leader", "get-cluster-info")
-        assert task.success
-        assert task.results["unit-count"] == "3"
+        results = _wait_peer_convergence(juju, 3)
+        assert results["unit-count"] == "3"
 
     def test_peer_data_all_units(self, juju: jubilant.Juju):
+        # Same peer-membership lag as above. Converge explicitly rather than
+        # relying on the preceding test having already waited it out — that made
+        # this test's correctness depend on class execution order.
+        _wait_peer_convergence(juju, 3)
         task = juju.run(f"{APP}/leader", "get-peer-data")
         unit_data = json.loads(task.results["unit-data"])
         assert len(unit_data) == 3, "All 3 units should have peer data"
