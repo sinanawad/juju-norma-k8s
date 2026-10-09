@@ -72,6 +72,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
@@ -85,9 +86,11 @@ jobs:
           echo "Building version: $version (arch: ${{ matrix.arch }})"
 
       - name: Setup LXD
+        timeout-minutes: 15
         uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee # v1
 
       - name: Install rockcraft
+        timeout-minutes: 10
         run: sudo snap install rockcraft --classic
 
       - name: Stamp build version
@@ -105,6 +108,7 @@ jobs:
           echo "Stamped workload version: $ver"
 
       - name: Pack ROCK
+        timeout-minutes: 20
         run: rockcraft pack --platform ${{ matrix.arch }}
 
       - name: Log in to ghcr.io
@@ -125,6 +129,7 @@ jobs:
           echo "Base tag: $base"
 
       - name: Push per-arch ROCK
+        timeout-minutes: 10
         run: |
           ROCK_FILE=$(ls *.rock | head -1)
           rockcraft.skopeo --insecure-policy copy \
@@ -135,6 +140,7 @@ jobs:
     name: Assemble multi-arch manifest
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write      # push the manifest list + the attestation to ghcr
@@ -162,6 +168,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create + push manifest list (${{ steps.tag.outputs.base }})
+        timeout-minutes: 5
         run: |
           docker buildx imagetools create \
             --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
@@ -169,6 +176,7 @@ jobs:
             "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-arm64"
 
       - name: Tag as ${{ steps.tag.outputs.extra_tag }}
+        timeout-minutes: 5
         run: |
           docker buildx imagetools create \
             --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.extra_tag }}" \
@@ -194,6 +202,7 @@ jobs:
           echo "Image digest: $digest"
 
       - name: Attest build provenance (ROCK image)
+        timeout-minutes: 5
         # Cryptographically signed SLSA provenance for the pushed multi-arch
         # image, stored alongside it in ghcr; verify with `gh attestation verify
         # oci://<ref> --owner <owner>`.
@@ -205,10 +214,14 @@ jobs:
 
   # Deliver publish failures. The publish chain (publish-rock -> publish-edge) is
   # unattended, and publish-edge sat red from 2026-09-02 to 2026-10-09 (charmcraft 4.4
-  # invalidated the Candid-issued CHARMHUB_TOKEN) with nobody told. Deliberately quiet,
-  # like the nightly verdict: ONE reused issue per red streak (per workflow), its body
-  # rewritten with the latest failing run, closed automatically on the next success.
-  # Skipped runs are not failures and stay silent.
+  # invalidated the Candid-issued CHARMHUB_TOKEN) with nobody told. Deliberately
+  # quiet, like the nightly verdict: ONE reused issue per red streak (per workflow and
+  # ref), labelled publish-failure, its body rewritten with the latest failing run,
+  # closed automatically on the next success. Skipped runs (CI red, fork guard,
+  # nothing that ships changed) stay silent. Cancelled runs stay silent:
+  # cancel-in-progress routinely supersedes older builds. Hangs still surface: the
+  # long steps have step-level timeouts, which GitHub records as failures (a job
+  # timeout would be recorded as cancelled).
   notify:
     name: Publish failure issue
     needs: [build, manifest]
@@ -218,6 +231,9 @@ jobs:
        (!contains(needs.*.result, 'skipped') && !contains(needs.*.result, 'cancelled')))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # Reporting must never change the publish outcome: without this, a GitHub API
+    # error here would turn a green run red (and could stop a chained workflow).
+    continue-on-error: true
     permissions:
       issues: write
     steps:
@@ -226,22 +242,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           RESULT: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
-          TITLE: ${{ github.workflow }} is failing
+          TITLE: ${{ github.workflow }}${{ github.ref_name != 'main' && format(' ({0})', github.ref_name) || '' }} is failing
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HINT: >-
+            If the log shows a ghcr.io `denied` or `unauthorized` error, check the job's
+            `packages: write` permission and the package's Actions access settings.
         run: |
           set -euo pipefail
+          # A label, not a title search: the search index lags, so two quick
+          # failures could each open an issue, and only one would ever be closed.
+          gh label create publish-failure --color B60205 \
+            --description "Unattended publishing is failing" --force >/dev/null
           # shellcheck disable=SC2016  # $ENV.TITLE is a jq variable, not shell
-          num=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number,title \
+          num=$(gh api "repos/${GH_REPO}/issues?state=open&labels=publish-failure&per_page=100" \
                   --jq 'map(select(.title == $ENV.TITLE)) | .[0].number // empty')
           if [ "$RESULT" = failure ]; then
             body="Latest failing run ($(date -u +%F)): $RUN_URL
 
           This issue stays open, and is updated, for as long as publishing keeps failing; it closes itself on the next successful run.
-          If the log shows \`Invalid macaroon\` or another store auth error, the CharmHub token needs (CHARMHUB_TOKEN) re-exporting with the current charmcraft (see the charmcraft 4.4 Candid -> Ubuntu One migration)."
+          $HINT"
             if [ -n "$num" ]; then
               gh issue edit "$num" --body "$body"
             else
-              gh issue create --title "$TITLE" --body "$body"
+              gh issue create --title "$TITLE" --label publish-failure --body "$body"
             fi
           elif [ -n "$num" ]; then
             gh issue close "$num" --comment "Recovered: $RUN_URL"
