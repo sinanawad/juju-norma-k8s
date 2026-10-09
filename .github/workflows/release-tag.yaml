@@ -4,30 +4,31 @@ name: Release (tag)
 #   1. Promote the revision currently on latest/edge to latest/candidate.
 #      The promotion preserves the revision number and attached resources,
 #      so the exact bits already validated on edge flow to candidate.
-#   2. Build the sudoer variant (.charm) for the GitHub Release. Sudoer
-#      is never published to CharmHub per the hybrid distribution model.
-#   3. Download the principal charm from latest/candidate (the artifact
-#      that just got promoted), so the GH Release attaches the canonical
-#      .charm — byte-identical to what CharmHub serves.
-#   4. Create a GitHub Release with principal + sudoer .charm files
-#      attached.
+#   2. Pack the PRINCIPAL charm and the SUDOER variant FROM THE TAGGED COMMIT.
+#      Sudoer is never published to CharmHub per the hybrid distribution model.
+#   3. Cut a GitHub Release with both .charm files (packed from the tag in
+#      step 2 — coherent, no CharmHub round-trip) and SHA256SUMS, all
+#      SLSA-attested.
+#   4. Build the versioned ROCK (ghcr.io/<owner>/juju-norma:<version>) from the
+#      tag with the same reusable workflow publish-edge uses.
 #
-# The ROCK is published separately by publish-rock.yaml (same trigger).
+# charmcraft has no `download` command, so the principal cannot be fetched back
+# from latest/candidate (an earlier version of step 3 tried, and would have
+# failed on the first tag; juju-norma's v0.0.1-rc1 dry run hit the same bug).
 
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write   # for the GitHub Release
+  contents: read
 
 jobs:
   promote-to-candidate:
     name: Promote latest/edge -> latest/candidate
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
 
@@ -35,19 +36,35 @@ jobs:
         env:
           CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
         run: |
-          charmcraft promote \
+          set -uo pipefail
+          # Retry transient CharmHub failures (connection drops mid-call) so an
+          # unattended tag release doesn't abort on a blip.
+          cc() {
+            local rc
+            for attempt in 1 2 3 4 5; do
+              charmcraft "$@" && return 0
+              rc=$?
+              echo "charmcraft $1 attempt $attempt failed (rc=$rc); retrying in 20s" >&2
+              sleep 20
+            done
+            echo "charmcraft $1 failed after 5 attempts" >&2
+            return 1
+          }
+          cc promote \
             --name=juju-norma-k8s \
             --from-channel=latest/edge \
             --to-channel=latest/candidate \
             --yes
 
-  build-sudoer:
-    name: Pack sudoer variant
+  build-artifacts:
+    name: Pack principal + sudoer charms
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # charm `version` part needs git history
+          persist-credentials: false
 
       - name: Setup LXD
         uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee # v1
@@ -55,8 +72,10 @@ jobs:
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
 
-      - name: Fetch charm libs
-        run: charmcraft fetch-libs
+      - name: Pack principal charm (committed libs, as tested by CI)
+        run: |
+          charmcraft pack -v
+          mv juju-norma-k8s_*.charm principal.charm
 
       - name: Pack with sudoer overlay
         run: |
@@ -64,53 +83,45 @@ jobs:
           cp charmcraft.yaml charmcraft-principal.yaml.bak
           cp charmcraft-sudoer.yaml charmcraft.yaml
           charmcraft pack -v
-          sudoer=$(ls juju-norma-k8s_*.charm | head -1)
-          mv "$sudoer" juju-norma-k8s-sudoer_amd64.charm
+          mv juju-norma-k8s_*.charm juju-norma-k8s-sudoer_amd64.charm
           mv charmcraft-principal.yaml.bak charmcraft.yaml
+          mv principal.charm juju-norma-k8s_amd64.charm
 
-      - name: Upload sudoer artifact
+      - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: sudoer-charm
-          path: juju-norma-k8s-sudoer_amd64.charm
+          name: release-artifacts
+          path: |
+            juju-norma-k8s_amd64.charm
+            juju-norma-k8s-sudoer_amd64.charm
           if-no-files-found: error
 
   github-release:
     name: Create GitHub Release
-    needs: [promote-to-candidate, build-sudoer]
+    needs: [promote-to-candidate, build-artifacts]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write      # create the GitHub Release
       id-token: write       # OIDC token for build-provenance signing
       attestations: write   # record the provenance attestation
     steps:
+      # gh release create needs a git repo context (to resolve the repo + tag);
+      # this job builds nothing, it just bundles the artifacts into a Release.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Install charmcraft
-        run: sudo snap install charmcraft --classic
-
-      - name: Download principal .charm from latest/candidate
-        env:
-          CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
-        run: |
-          # `charmcraft download` writes the canonical artifact that
-          # CharmHub serves on this channel — byte-identical to what
-          # users will pull via `juju deploy --channel=latest/candidate`.
-          charmcraft download juju-norma-k8s --channel=latest/candidate
-          # Normalize the filename to match the convention of older runs.
-          downloaded=$(ls juju-norma-k8s_*.charm | head -1)
-          mv "$downloaded" juju-norma-k8s_amd64.charm
-
-      - name: Download sudoer artifact
+      - name: Download built artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: sudoer-charm
+          name: release-artifacts
 
       - name: Generate SHA256SUMS
         run: |
           sha256sum juju-norma-k8s_amd64.charm juju-norma-k8s-sudoer_amd64.charm \
-            > SHA256SUMS
-          cat SHA256SUMS
+            | tee SHA256SUMS
 
       - name: Attest build provenance (charms)
         # Signed SLSA provenance for both .charm artifacts; verify with
@@ -131,3 +142,26 @@ jobs:
             juju-norma-k8s_amd64.charm \
             juju-norma-k8s-sudoer_amd64.charm \
             SHA256SUMS
+
+  version:
+    name: Read the version from the tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  rock:
+    name: Build the versioned ROCK
+    needs: version
+    uses: ./.github/workflows/publish-rock.yaml
+    permissions:
+      contents: read
+      packages: write      # push the images + the attestation to ghcr
+      id-token: write       # OIDC token for build-provenance signing
+      attestations: write   # record the provenance attestation
+    with:
+      sha: ${{ github.sha }}
+      base: ${{ needs.version.outputs.version }}
