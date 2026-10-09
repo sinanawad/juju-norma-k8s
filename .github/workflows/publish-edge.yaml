@@ -1,84 +1,227 @@
 name: Publish to latest/edge
 
-# Continuous publish: every successful push to main produces a fresh
-# revision on latest/edge so consumers (notably Juju CI) always have
-# the bleeding edge. Promotion to higher risk levels (candidate, stable)
-# happens via release-tag.yaml (on git tags) or promote.yaml (manual).
+# Continuous publish: every green push to main that changes what ships produces
+# a fresh revision on latest/edge, so consumers (notably Juju CI) always have the
+# bleeding edge. Promotion to higher risk levels (candidate, stable) happens via
+# release-tag.yaml (on git tags) or promote.yaml (manual).
 #
-# Chained via workflow_run so the ROCK on ghcr.io is fresh before the
-# charm's OCI resource is attached. If publish-rock fails on a commit,
-# this workflow does not run for that commit — preventing a charm
-# revision pointing at a stale OCI image.
+# Chained off CI (not a push trigger) so a broken commit never ships to edge, and
+# one run builds both artifacts from the same, CI-validated commit:
+# gate -> rock (publish-rock.yaml, reusable) -> publish -> tag -> notify.
+#   - gate: only green CI for a PUSH from this repo, and only when the commit
+#     changes something that ships since the commit of the revision on edge
+#     (scripts/charmhub-edge.sh, shared with juju-norma). A manual dispatch
+#     forces a publish of main, but never of a commit whose push CI did not pass.
+#   - rock: the ROCK for this commit, pushed as :main-<short-sha>.
+#   - publish: the charm, with its OCI resource pinned to that exact image (not
+#     the moving :latest), refusing to roll edge back if a newer commit shipped
+#     meanwhile (e.g. a re-run of an old run).
+#   - tag: the published commit gets the git tag rev<N>.
 
 on:
   workflow_run:
-    workflows: ["Publish ROCK"]
+    workflows: ["CI"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
 
 concurrency:
   # Serialize CharmHub latest/edge uploads so two publishes can't race the
-  # channel pointer. Never cancel an in-flight upload — let it finish; the
-  # newest pending run (latest charm revision) runs after and wins. Belt-and-
-  # suspenders: publish-rock's concurrency already collapses main-push bursts.
-  group: ${{ github.workflow }}
+  # channel pointer. Never cancel an in-flight upload — let it finish; the newest
+  # pending run wins after. Runs that cannot publish (anything but a green push
+  # CI run of this repo) get a group of their own, so they never displace a
+  # pending publish.
+  group: ${{ github.workflow }}${{ github.event_name == 'workflow_run' && (github.event.workflow_run.event != 'push' || github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.head_repository.full_name != github.repository) && format('-noop-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 permissions:
-  contents: write   # canonical/charming-actions/upload-charm pushes a git tag
-                    # ("rev<N>-<sha>") for each new charm revision; without
-                    # write the action fails with "Resource not accessible".
+  contents: read
 
 jobs:
-  publish:
-    name: Publish principal charm to latest/edge
+  gate:
+    name: Decide whether to publish
     runs-on: ubuntu-24.04
-    # Only on workflow_run success, or any workflow_dispatch.
+    timeout-minutes: 15
+    # A green CI run for a PUSH, from THIS repo (a fork PR whose head branch is
+    # named "main" also fires workflow_run with branches:[main]; the
+    # head_repository guard stops it), or a manual dispatch of main.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    permissions:
+      contents: read
+      actions: read # manual dispatch: look up the commit's push CI result
+    outputs:
+      sha: ${{ steps.decide.outputs.sha }}
+      base: ${{ steps.decide.outputs.base }}
+      publish: ${{ steps.decide.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 5
         with:
+          # The exact commit CI validated (empty on manual dispatch → main HEAD).
+          # Never the default github.sha: on workflow_run that is main's HEAD NOW,
+          # which a rapid follow-up push may have moved.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0 # the change check diffs against the commit on edge
+          persist-credentials: false
+
+      - name: Compare with the revision on latest/edge
+        id: decide
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "base=main-${sha:0:7}" >> "$GITHUB_OUTPUT"
+          if [ "$MANUAL" = true ]; then
+            # Forces a publish (e.g. after a change to how the artifact is built),
+            # but never of a commit whose push CI did not pass.
+            green=$(gh api "repos/${GH_REPO}/actions/workflows/ci.yaml/runs?head_sha=${sha}&event=push&status=success" --jq .total_count)
+            if [ "$green" = 0 ]; then
+              echo "::error::push CI has not passed for ${sha:0:7}; refusing to publish it"
+              exit 1
+            fi
+            echo "manual dispatch: publishing ${sha:0:7} (its push CI passed)"
+            publish=true
+          else
+            publish=$(scripts/charmhub-edge.sh needs-publish juju-norma-k8s "$sha")
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  rock:
+    name: Build ROCK
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    uses: ./.github/workflows/publish-rock.yaml
+    permissions:
+      contents: read
+      packages: write      # push the images + the attestation to ghcr
+      id-token: write       # OIDC token for build-provenance signing
+      attestations: write   # record the provenance attestation
+    with:
+      sha: ${{ needs.gate.outputs.sha }}
+      base: ${{ needs.gate.outputs.base }}
+
+  publish:
+    name: Publish principal charm to latest/edge
+    needs: [gate, rock]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 5
+        with:
+          ref: ${{ needs.gate.outputs.sha }} # the CI-validated commit (see gate)
           fetch-depth: 0   # charm `version` part needs git history
+          persist-credentials: false
+
+      - name: Refuse to roll edge back
+        id: recheck
+        timeout-minutes: 5
+        # The gate's decision can be stale here: re-running an old run after newer
+        # commits shipped must not release the older charm over them.
+        run: |
+          rollback=$(scripts/charmhub-edge.sh would-roll-back juju-norma-k8s "$(git rev-parse HEAD)")
+          echo "rollback=$rollback" >> "$GITHUB_OUTPUT"
+
+      - name: Pin the OCI resource to this run's image
+        if: steps.recheck.outputs.rollback == 'false'
+        env:
+          IMAGE: ${{ needs.rock.outputs.image }}
+        # charmcraft.yaml points juju-norma-image at the moving :latest, and
+        # upload-charm uploads whatever upstream-source names at upload time; a tag
+        # build or another run could have moved :latest meanwhile.
+        run: |
+          case "$IMAGE" in ghcr.io/*/juju-norma:main-*) ;; *) echo "::error::unexpected image '$IMAGE'"; exit 1;; esac
+          sed -i -E "s|^(\s+upstream-source:\s+)ghcr\.io/[^[:space:]]+/juju-norma:latest\s*$|\1${IMAGE}|" charmcraft.yaml
+          grep -qx "    upstream-source: ${IMAGE}" charmcraft.yaml
+          echo "juju-norma-image pinned to ${IMAGE}"
 
       - name: Setup LXD
+        if: steps.recheck.outputs.rollback == 'false'
+        timeout-minutes: 15
         uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee # v1
 
       - name: Install charmcraft
+        if: steps.recheck.outputs.rollback == 'false'
+        timeout-minutes: 10
         run: sudo snap install charmcraft --classic
 
-      - name: Fetch charm libs
-        run: charmcraft fetch-libs
-
       - name: Pack principal charm
+        if: steps.recheck.outputs.rollback == 'false'
+        timeout-minutes: 20
+        # Committed libs only (no fetch-libs): CI's lib-check fails PRs on drift,
+        # so what ships is exactly what CI tested.
         run: charmcraft pack -v
 
       - name: Upload + release to latest/edge
+        if: steps.recheck.outputs.rollback == 'false'
+        timeout-minutes: 15
         uses: canonical/charming-actions/upload-charm@1753e0803f70445132e92acd45c905aba6473225 # 2.7.0
         with:
           credentials: ${{ secrets.CHARMHUB_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           channel: latest/edge
           built-charm-path: juju-norma-k8s_amd64.charm
+          # The action would tag/release GITHUB_SHA, which on workflow_run is
+          # main's HEAD, not necessarily the commit packed here; the tag job
+          # tags the published commit instead.
+          github-tag: false
+
+      - name: Record the publish
+        id: release
+        if: steps.recheck.outputs.rollback == 'false'
+        run: echo "published=true" >> "$GITHUB_OUTPUT"
+
+  tag:
+    name: Tag the commit with its edge revision
+    needs: [gate, publish]
+    if: needs.publish.outputs.published == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the rev<N> tag; this job holds no CharmHub secret
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 5
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Tag rev<N> on the published commit
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/charmhub-edge.sh tag-revision juju-norma-k8s "$(git rev-parse HEAD)"
 
   # Deliver publish failures. The publish chain (publish-rock -> publish-edge) is
   # unattended, and publish-edge sat red from 2026-09-02 to 2026-10-09 (charmcraft 4.4
   # invalidated the Candid-issued CHARMHUB_TOKEN) with nobody told. Deliberately
   # quiet, like the nightly verdict: ONE reused issue per red streak (per workflow and
   # ref), labelled publish-failure, its body rewritten with the latest failing run,
-  # closed automatically on the next success. Skipped runs (CI red, fork guard,
-  # nothing that ships changed) stay silent. Nothing cancels an in-flight publish here
+  # closed automatically on the next healthy run. Runs that never pass the gate (CI
+  # red, nightly, fork guard) stay silent. Nothing cancels an in-flight publish here
   # (no cancel-in-progress), so a cancelled job means a timeout (GitHub records job
-  # timeouts as cancelled) or a manual cancel: both are reported.
+  # timeouts as cancelled) or a manual cancel: both are reported. A healthy run with
+  # nothing to publish (gate succeeded, edge already carries everything that ships)
+  # closes an open issue too.
   notify:
     name: Publish failure issue
-    needs: [publish]
+    needs: [gate, rock, publish, tag]
     if: >-
       always() &&
       (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') ||
-       !contains(needs.*.result, 'skipped'))
+       needs.gate.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Reporting must never change the publish outcome: without this, a GitHub API

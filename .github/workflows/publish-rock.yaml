@@ -1,64 +1,41 @@
 name: Publish ROCK
 
-# Builds the chiselled OCI image (ROCK) for both amd64 and arm64,
-# pushes each architecture under a per-arch tag, then assembles a
-# multi-arch manifest list so consumers can pull a single image
-# reference that resolves to the correct platform.
+# Reusable: builds the chiselled OCI image (ROCK) for both amd64 and arm64 from
+# one commit, pushes each architecture under a per-arch tag, then assembles a
+# multi-arch manifest list so consumers can pull a single image reference that
+# resolves to the correct platform.
+#
+# Called by publish-edge.yaml (edge: base = main-<short-sha>) and
+# release-tag.yaml (v* tags: base = <version>), so the image is always built in
+# the same run, and from the same commit, as the charm it ships with.
 #
 # Tags produced:
-#   - push to main           : ghcr.io/<owner>/juju-norma:latest
-#                              ghcr.io/<owner>/juju-norma:main-<short-sha>
-#   - tag v<version>         : ghcr.io/<owner>/juju-norma:<version>
-#                              ghcr.io/<owner>/juju-norma:latest
-#
-# The per-arch tags (:<base>-amd64, :<base>-arm64) are kept after the
-# manifest list is created so a future regen can re-reference them
-# without rebuilding.
+#   ghcr.io/<owner>/juju-norma:<base>          multi-arch manifest list
+#   ghcr.io/<owner>/juju-norma:<base>-<arch>   per-arch images (kept so a future
+#                                               regen can re-reference them)
+#   ghcr.io/<owner>/juju-norma:latest          moved to the newest build
+# Consumers of a specific build should use <base>: :latest moves.
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-    # The .charm artifact does not bundle README/docs/specs/scripts —
-    # changes to those files don't alter what consumers deploy. Skip
-    # the ROCK rebuild + downstream publish-edge cascade for docs-only
-    # commits to save CI time and avoid spurious revision-number churn
-    # on CharmHub. Tag pushes still build regardless (a tag implies
-    # an intentional release artifact).
-    paths-ignore:
-      - "README.md"
-      - "docs/**"
-      - "specs/**"
-      - "scripts/**"
-      - "**.md"
-      # These don't affect the built charm or ROCK, so they must not trigger a
-      # republish (e.g. dependabot GitHub-Actions bumps under .github/**, which
-      # otherwise spam latest/edge with churn revisions). Artifact inputs
-      # (workload/**, src/**, lib/**, charmcraft*.yaml, rockcraft.yaml,
-      # pyproject.toml, uv.lock, icon.svg) are deliberately NOT ignored.
-      - ".github/**"
-      - "tests/**"
-      - "Makefile"
-      - ".gitignore"
-  workflow_dispatch:
-
-concurrency:
-  # Collapse a burst of main pushes (e.g. several dependabot merges landing
-  # seconds apart) so only the NEWEST commit's ROCK build runs to completion.
-  # Without this, overlapping builds finish out-of-order and the chained
-  # publish-edge that finishes last wins latest/edge — which may be a stale
-  # revision. Per-ref group so release-tag builds get their own group and are
-  # never cancelled by main pushes or each other.
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
+    inputs:
+      sha:
+        description: Commit to build.
+        required: true
+        type: string
+      base:
+        description: Image tag base (main-<short-sha> or <version>); also baked into the binary.
+        required: true
+        type: string
+    outputs:
+      image:
+        description: The pushed multi-arch image, by its immutable <base> tag.
+        value: ${{ jobs.manifest.outputs.image }}
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/juju-norma
-
-permissions:
-  contents: read
-  packages: write
+  BASE: ${{ inputs.base }}
 
 jobs:
   build:
@@ -73,17 +50,15 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
-    outputs:
-      version: ${{ steps.meta.outputs.version }}
+    permissions:
+      contents: read
+      packages: write # push the per-arch images to ghcr
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Read ROCK version
-        id: meta
-        run: |
-          version=$(awk '/^version:/ {gsub(/"/, "", $2); print $2}' rockcraft.yaml)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Building version: $version (arch: ${{ matrix.arch }})"
+        timeout-minutes: 5
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
 
       - name: Setup LXD
         timeout-minutes: 15
@@ -94,18 +69,12 @@ jobs:
         run: sudo snap install rockcraft --classic
 
       - name: Stamp build version
-        # Bake the image tag base (main-<sha> on main, <semver> on a tag) into
-        # the binary so the running workload reports exactly which OCI resource
-        # revision it is — the charm's get-version action execs `norma --version`.
-        # Must match "Determine tag base" below; rockcraft reads workload/version.txt.
+        # Bake the image tag base into the binary so the running workload reports
+        # exactly which OCI resource revision it is — the charm's get-version action
+        # execs `norma --version`. rockcraft reads workload/version.txt.
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            ver="${GITHUB_REF#refs/tags/v}"
-          else
-            ver="main-$(echo "$GITHUB_SHA" | cut -c1-7)"
-          fi
-          echo "$ver" > workload/version.txt
-          echo "Stamped workload version: $ver"
+          echo "$BASE" > workload/version.txt
+          echo "Stamped workload version: $BASE"
 
       - name: Pack ROCK
         timeout-minutes: 20
@@ -113,29 +82,22 @@ jobs:
 
       - name: Log in to ghcr.io
         timeout-minutes: 5
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | \
-            rockcraft.skopeo login --username "${{ github.actor }}" \
+          echo "$TOKEN" | rockcraft.skopeo login --username "$ACTOR" \
             --password-stdin "$REGISTRY"
-
-      - name: Determine tag base
-        id: tag
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            base="${GITHUB_REF#refs/tags/v}"
-          else
-            base="main-$(echo "$GITHUB_SHA" | cut -c1-7)"
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "Base tag: $base"
 
       - name: Push per-arch ROCK
         timeout-minutes: 10
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           ROCK_FILE=$(ls *.rock | head -1)
           rockcraft.skopeo --insecure-policy copy \
             "oci-archive:${ROCK_FILE}" \
-            "docker://${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-${{ matrix.arch }}"
+            "docker://${REGISTRY}/${IMAGE_NAME}:${BASE}-${ARCH}"
 
   manifest:
     name: Assemble multi-arch manifest
@@ -147,20 +109,9 @@ jobs:
       packages: write      # push the manifest list + the attestation to ghcr
       id-token: write       # OIDC token for build-provenance signing
       attestations: write   # record the provenance attestation
+    outputs:
+      image: ${{ steps.digest.outputs.image }}
     steps:
-      - name: Determine tag base
-        id: tag
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            base="${GITHUB_REF#refs/tags/v}"
-            extra_tag="latest"
-          else
-            base="main-$(echo "$GITHUB_SHA" | cut -c1-7)"
-            extra_tag="latest"
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "extra_tag=$extra_tag" >> "$GITHUB_OUTPUT"
-
       - name: Log in to ghcr.io
         timeout-minutes: 5
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -169,27 +120,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create + push manifest list (${{ steps.tag.outputs.base }})
+      - name: Create + push manifest list (${{ inputs.base }})
         timeout-minutes: 5
         run: |
           docker buildx imagetools create \
-            --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
-            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-amd64" \
-            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-arm64"
+            --tag "${REGISTRY}/${IMAGE_NAME}:${BASE}" \
+            "${REGISTRY}/${IMAGE_NAME}:${BASE}-amd64" \
+            "${REGISTRY}/${IMAGE_NAME}:${BASE}-arm64"
 
-      - name: Tag as ${{ steps.tag.outputs.extra_tag }}
+      - name: Tag as latest
         timeout-minutes: 5
         run: |
           docker buildx imagetools create \
-            --tag "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.extra_tag }}" \
-            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-amd64" \
-            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-arm64"
+            --tag "${REGISTRY}/${IMAGE_NAME}:latest" \
+            "${REGISTRY}/${IMAGE_NAME}:${BASE}-amd64" \
+            "${REGISTRY}/${IMAGE_NAME}:${BASE}-arm64"
 
       - name: Verify multi-arch manifest
         timeout-minutes: 5
         run: |
-          docker buildx imagetools inspect \
-            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
+          docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${BASE}" \
             | tee inspect.txt
           grep -q "linux/amd64" inspect.txt
           grep -q "linux/arm64" inspect.txt
@@ -199,11 +149,11 @@ jobs:
         timeout-minutes: 5
         id: digest
         run: |
-          digest=$(docker buildx imagetools inspect \
-            "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
+          digest=$(docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${BASE}" \
             --format '{{ .Manifest.Digest }}')
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "Image digest: $digest"
+          echo "image=${REGISTRY}/${IMAGE_NAME}:${BASE}" >> "$GITHUB_OUTPUT"
+          echo "Image ${REGISTRY}/${IMAGE_NAME}:${BASE} digest: $digest"
 
       - name: Attest build provenance (ROCK image)
         timeout-minutes: 5
@@ -215,64 +165,3 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
-
-  # Deliver publish failures. The publish chain (publish-rock -> publish-edge) is
-  # unattended, and publish-edge sat red from 2026-09-02 to 2026-10-09 (charmcraft 4.4
-  # invalidated the Candid-issued CHARMHUB_TOKEN) with nobody told. Deliberately
-  # quiet, like the nightly verdict: ONE reused issue per red streak (per workflow and
-  # ref), labelled publish-failure, its body rewritten with the latest failing run,
-  # closed automatically on the next success. Skipped runs (CI red, fork guard,
-  # nothing that ships changed) stay silent. Cancelled runs stay silent:
-  # cancel-in-progress routinely supersedes older builds. Hangs still surface: the
-  # long steps have step-level timeouts, which GitHub records as failures (a job
-  # timeout would be recorded as cancelled).
-  notify:
-    name: Publish failure issue
-    needs: [build, manifest]
-    if: >-
-      always() &&
-      (contains(needs.*.result, 'failure') ||
-       (!contains(needs.*.result, 'skipped') && !contains(needs.*.result, 'cancelled')))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    # Reporting must never change the publish outcome: without this, a GitHub API
-    # error here would turn a green run red (and could stop a chained workflow).
-    continue-on-error: true
-    permissions:
-      issues: write
-    steps:
-      - name: Open, update or close the publish-failure issue
-        # A STEP timeout is recorded as a failure, which continue-on-error
-        # absorbs; a job timeout would be a cancel, which it does not.
-        timeout-minutes: 3
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RESULT: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
-          TITLE: ${{ github.workflow }}${{ github.ref_name != 'main' && format(' ({0})', github.ref_name) || '' }} is failing
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          HINT: >-
-            If the log shows a ghcr.io `denied` or `unauthorized` error, check the job's
-            `packages: write` permission and the package's Actions access settings.
-        run: |
-          set -euo pipefail
-          # A label, not a title search: the search index lags, so two quick
-          # failures could each open an issue, and only one would ever be closed.
-          gh label create publish-failure --color B60205 \
-            --description "Unattended publishing is failing" --force >/dev/null
-          # shellcheck disable=SC2016  # $ENV.TITLE is a jq variable, not shell
-          num=$(gh api "repos/${GH_REPO}/issues?state=open&labels=publish-failure&per_page=100" \
-                  --jq 'map(select(.title == $ENV.TITLE)) | .[0].number // empty')
-          if [ "$RESULT" = failure ]; then
-            body="Latest failing run ($(date -u +%F)): $RUN_URL
-
-          This issue stays open, and is updated, for as long as publishing keeps failing; it closes itself on the next successful run.
-          $HINT"
-            if [ -n "$num" ]; then
-              gh issue edit "$num" --body "$body"
-            else
-              gh issue create --title "$TITLE" --label publish-failure --body "$body"
-            fi
-          elif [ -n "$num" ]; then
-            gh issue close "$num" --comment "Recovered: $RUN_URL"
-          fi
