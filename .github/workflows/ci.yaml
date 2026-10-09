@@ -13,8 +13,10 @@ on:
 concurrency:
   # Cancel a superseded CI run for the same ref (a new push to a PR/branch
   # supersedes the previous run), freeing runners — including the long
-  # microk8s integration job. Nightly/dispatch full runs use distinct refs.
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # microk8s integration job. Scheduled and dispatched FULL runs get a UNIQUE
+  # group (per run id): they also run on refs/heads/main, so with a plain
+  # workflow-ref group a merge cancelled the nightly mid-flight and vice versa.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || 'shared' }}
   cancel-in-progress: true
 
 # Least-privilege default token (untrusted PRs get read-only). Jobs that need
@@ -60,14 +62,53 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Check charm libraries are in sync with CharmHub
-        # Fails if any vendored lib in lib/charms/ has drifted from its upstream
-        # CharmHub revision (the declared lint→unit→lib-check→pack→integration gate).
+        # Drift of any vendored lib in lib/charms/ from its CharmHub revision
+        # FAILS a pull request: refresh with `charmcraft fetch-lib` and commit it.
+        # (The action defaults fail-build to false, which only logged drift.) On
+        # push and scheduled runs drift is only logged: an upstream lib release
+        # must not turn main red and freeze publishing, and what ships is the
+        # committed, tested libs anyway (pack/publish never fetch).
+        # No CharmHub credential: `charmcraft fetch-lib` reads published libs
+        # anonymously, and this job runs on PRs, so it must hold no store token.
         uses: canonical/charming-actions/check-libraries@1753e0803f70445132e92acd45c905aba6473225 # 2.7.0
         with:
-          credentials: ${{ secrets.CHARMHUB_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           use-labels: false
+          fail-build: ${{ github.event_name == 'pull_request' }}
+
+  go-test:
+    name: Go Tests
+    runs-on: ubuntu-24.04
+    needs: lint
+    timeout-minutes: 15
+    # Moved here from the path-filtered rock.yaml: publish-edge now only ships
+    # commits whose push CI passed, so the workload's tests have to be part of it.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Single source of truth: read the version straight from go.mod so a
+          # Dependabot bump to the `go` directive can't drift from the toolchain
+          # CI installs.
+          go-version-file: workload/go.mod
+          cache-dependency-path: workload/go.sum
+      - name: Build
+        working-directory: workload
+        run: CGO_ENABLED=0 go build -o norma ./...
+      - name: Vet
+        working-directory: workload
+        run: go vet ./...
+      - name: Test
+        working-directory: workload
+        # -race because health is read concurrently (HTTP handlers + Prometheus
+        # scrape). -count=1 defeats the test cache so a green here always means
+        # the tests actually ran.
+        run: go test -race -count=1 -v ./...
 
   pack:
     name: Pack Charm
@@ -79,8 +120,9 @@ jobs:
         uses: canonical/setup-lxd@8c6a87bfb56aa48f3fb9b830baa18562d8bfd4ee # v1
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
-      - run: charmcraft fetch-libs
       - name: Pack principal charm
+        # Committed libs only (no fetch-libs): the integration tests then test
+        # exactly what ships.
         run: charmcraft pack
       - name: Pack sudoer variant
         run: |
@@ -122,10 +164,13 @@ jobs:
           path: "*.rock"
 
   # Decide the integration matrix from the triggering event:
-  #   - pull_request / push        -> fast smoke subset on Juju 4.0/edge
-  #                                    (the engine-under-test: regressions land
-  #                                    in edge first). ~one deploy + a handful of
-  #                                    quick assertions.
+  #   - pull_request / push        -> fast smoke subset on Juju 4.0/stable
+  #                                    (~one deploy + a handful of quick
+  #                                    assertions). Stable, not edge: this run
+  #                                    gates merges AND publishing to edge, so a
+  #                                    regression in the engine under test must
+  #                                    not block every charm change; the nightly
+  #                                    matrix below still covers 4.0/edge.
   #   - schedule / workflow_dispatch -> full 18-suite matrix across
   #                                    3.6/stable, 4.0/stable, 4.0/edge.
   integration-matrix:
@@ -139,7 +184,7 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo 'matrix={"include":[{"channel":"3.6/stable","mode":"full"},{"channel":"4.0/stable","mode":"full"},{"channel":"4.0/edge","mode":"full"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"channel":"4.0/edge","mode":"smoke"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"channel":"4.0/stable","mode":"smoke"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   integration:
