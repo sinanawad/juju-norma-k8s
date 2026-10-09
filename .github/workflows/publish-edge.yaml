@@ -29,9 +29,9 @@ concurrency:
   # Serialize CharmHub latest/edge uploads so two publishes can't race the
   # channel pointer. Never cancel an in-flight upload — let it finish; the newest
   # pending run wins after. Runs that cannot publish (anything but a green push
-  # CI run of this repo) get a group of their own, so they never displace a
-  # pending publish.
-  group: ${{ github.workflow }}${{ github.event_name == 'workflow_run' && (github.event.workflow_run.event != 'push' || github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.head_repository.full_name != github.repository) && format('-noop-{0}', github.run_id) || '' }}
+  # CI run of this repo, or a dispatch of main) get a group of their own, so they
+  # never displace a pending publish.
+  group: ${{ github.workflow }}${{ ((github.event_name == 'workflow_run' && (github.event.workflow_run.event != 'push' || github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.head_repository.full_name != github.repository)) || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main')) && format('-noop-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -107,6 +107,7 @@ jobs:
     with:
       sha: ${{ needs.gate.outputs.sha }}
       base: ${{ needs.gate.outputs.base }}
+      latest: true
 
   publish:
     name: Publish principal charm to latest/edge
@@ -204,17 +205,17 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: scripts/charmhub-edge.sh tag-revision juju-norma-k8s "$(git rev-parse HEAD)"
 
-  # Deliver publish failures. The publish chain (publish-rock -> publish-edge) is
-  # unattended, and publish-edge sat red from 2026-09-02 to 2026-10-09 (charmcraft 4.4
-  # invalidated the Candid-issued CHARMHUB_TOKEN) with nobody told. Deliberately
-  # quiet, like the nightly verdict: ONE reused issue per red streak (per workflow and
-  # ref), labelled publish-failure, its body rewritten with the latest failing run,
-  # closed automatically on the next healthy run. Runs that never pass the gate (CI
-  # red, nightly, fork guard) stay silent. Nothing cancels an in-flight publish here
-  # (no cancel-in-progress), so a cancelled job means a timeout (GitHub records job
-  # timeouts as cancelled) or a manual cancel: both are reported. A healthy run with
-  # nothing to publish (gate succeeded, edge already carries everything that ships)
-  # closes an open issue too.
+  # Deliver publish failures. Publishing (CI -> publish-edge, which builds the ROCK
+  # and the charm) is unattended, and publish-edge sat red from 2026-09-02 to
+  # 2026-10-09 (charmcraft 4.4 invalidated the Candid-issued CHARMHUB_TOKEN) with
+  # nobody told. Deliberately quiet, like the nightly verdict: ONE reused issue per
+  # red streak (per workflow and ref), labelled publish-failure, its body rewritten
+  # with the latest failing run, closed automatically on the next healthy run. Runs
+  # that never pass the gate (CI red, nightly, fork guard) stay silent. Nothing
+  # cancels an in-flight publish here (no cancel-in-progress), so a cancelled job
+  # means a timeout (GitHub records job timeouts as cancelled) or a manual cancel:
+  # both are reported. A healthy run with nothing to publish (gate succeeded, edge
+  # already carries everything that ships) closes an open issue too.
   notify:
     name: Publish failure issue
     needs: [gate, rock, publish, tag]
@@ -243,7 +244,9 @@ jobs:
           HINT: >-
             If the log shows `Invalid macaroon` or another store auth error, the CharmHub
             token (CHARMHUB_TOKEN) needs re-exporting with the current charmcraft (see the
-            charmcraft 4.4 Candid -> Ubuntu One migration).
+            charmcraft 4.4 Candid -> Ubuntu One migration). A ghcr.io `denied` or
+            `unauthorized` error in the ROCK build points at the rock job's `packages:
+            write` permission or the package's Actions access settings.
         run: |
           set -euo pipefail
           # A label, not a title search: the search index lags, so two quick

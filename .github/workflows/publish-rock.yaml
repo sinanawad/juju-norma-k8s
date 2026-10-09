@@ -13,7 +13,9 @@ name: Publish ROCK
 #   ghcr.io/<owner>/juju-norma:<base>          multi-arch manifest list
 #   ghcr.io/<owner>/juju-norma:<base>-<arch>   per-arch images (kept so a future
 #                                               regen can re-reference them)
-#   ghcr.io/<owner>/juju-norma:latest          moved to the newest build
+#   ghcr.io/<owner>/juju-norma:latest          moved to this build if `latest` (edge
+#                                               builds only: a release of an older
+#                                               tag must not move it backwards)
 # Consumers of a specific build should use <base>: :latest moves.
 
 on:
@@ -27,6 +29,11 @@ on:
         description: Image tag base (main-<short-sha> or <version>); also baked into the binary.
         required: true
         type: string
+      latest:
+        description: Also move the :latest tag to this build.
+        required: false
+        type: boolean
+        default: false
     outputs:
       image:
         description: The pushed multi-arch image, by its immutable <base> tag.
@@ -129,6 +136,7 @@ jobs:
             "${REGISTRY}/${IMAGE_NAME}:${BASE}-arm64"
 
       - name: Tag as latest
+        if: inputs.latest
         timeout-minutes: 5
         run: |
           docker buildx imagetools create \
