@@ -112,6 +112,7 @@ jobs:
         run: rockcraft pack --platform ${{ matrix.arch }}
 
       - name: Log in to ghcr.io
+        timeout-minutes: 5
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             rockcraft.skopeo login --username "${{ github.actor }}" \
@@ -161,6 +162,7 @@ jobs:
           echo "extra_tag=$extra_tag" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
+        timeout-minutes: 5
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -184,6 +186,7 @@ jobs:
             "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}-arm64"
 
       - name: Verify multi-arch manifest
+        timeout-minutes: 5
         run: |
           docker buildx imagetools inspect \
             "${REGISTRY}/${IMAGE_NAME}:${{ steps.tag.outputs.base }}" \
@@ -193,6 +196,7 @@ jobs:
           echo "Multi-arch manifest verified: amd64 + arm64 present"
 
       - name: Capture pushed image digest
+        timeout-minutes: 5
         id: digest
         run: |
           digest=$(docker buildx imagetools inspect \
@@ -238,6 +242,9 @@ jobs:
       issues: write
     steps:
       - name: Open, update or close the publish-failure issue
+        # A STEP timeout is recorded as a failure, which continue-on-error
+        # absorbs; a job timeout would be a cancel, which it does not.
+        timeout-minutes: 3
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
