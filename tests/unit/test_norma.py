@@ -12,8 +12,12 @@ import norma
 class TestConstants:
     """Verify all expected constants are defined."""
 
-    def test_ledger_file(self):
+    def test_ledger_file(self, monkeypatch):
+        # conftest redirects the on-disk files per test; check the shipped defaults.
+        monkeypatch.undo()
         assert norma.LEDGER_FILE == "/tmp/norma-event-ledger.json"
+        assert norma.DEFER_FLAG_FILE == "/tmp/norma-defer-armed"
+        assert norma.PENDING_REEMIT_FILE == "/tmp/norma-pending-reemit"
 
     def test_container_name(self):
         assert norma.CONTAINER_NAME == "norma"

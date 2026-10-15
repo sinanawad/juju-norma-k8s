@@ -2226,6 +2226,43 @@ class TestDeferral:
             assert mgr.charm._defer_armed is True
 
 
+class TestReemitMarker:
+    """ops resets event.deferred=False before re-running a deferred handler, so the
+    charm persists the deferred event's NAME and matches it on the next reconcile to
+    tag the re-emission (the old getattr(event, 'deferred') check never fired)."""
+
+    def test_defer_records_pending_reemit(self):
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(containers=[NORMA_CONTAINER, NORMA_SECONDARY])
+        with ctx(ctx.on.config_changed(), state) as mgr:
+            mgr.charm._defer_armed = True
+            mgr.run()
+        assert norma.read_pending_reemit() == "config-changed"
+
+    def test_reemission_tagged_and_cleared(self):
+        norma.write_defer_armed(False)
+        norma.write_pending_reemit("config-changed")
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(containers=[NORMA_CONTAINER, NORMA_SECONDARY])
+        with ctx(ctx.on.config_changed(), state) as mgr:
+            mgr.run()
+            cc = [e for e in mgr.charm._event_ledger if e["event_name"] == "config-changed"]
+            assert len(cc) == 1
+            assert cc[0]["extra"].get("re-emitted") == "true"
+        assert norma.read_pending_reemit() == ""
+
+    def test_non_pending_event_not_tagged(self):
+        norma.write_defer_armed(False)
+        norma.write_pending_reemit("install")
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(containers=[NORMA_CONTAINER, NORMA_SECONDARY])
+        with ctx(ctx.on.config_changed(), state) as mgr:
+            mgr.run()
+            cc = [e for e in mgr.charm._event_ledger if e["event_name"] == "config-changed"]
+            assert cc and "re-emitted" not in cc[0]["extra"]
+        assert norma.read_pending_reemit() == "install"
+
+
 class TestOCIResource:
     """US21: OCI Resource Lifecycle — resource refresh detection."""
 
