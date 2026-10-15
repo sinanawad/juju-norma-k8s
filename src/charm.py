@@ -177,15 +177,15 @@ class NormaK8sCharm(ops.CharmBase):
         the reconciler, satisfying constitutional Principle VII.
         """
         event_name = _event_to_kebab(event)
-        # Never defer update-status (high frequency) or relation-broken
-        # (re-emission fails because the relation no longer exists).
-        skip_defer = event_name in ("update-status", "relation-broken")
-        if self._defer_armed and not skip_defer:
-            extra: dict[str, str] = {"deferred": "true"}
-            self._log_event(event_name, extra)
+        if self._defer_armed and event_name not in norma.DEFER_SKIP_EVENTS:
+            self._log_event(event_name, {"deferred": "true"})
             event.defer()
             self._defer_armed = False
             norma.write_defer_armed(False)
+            # Record which event was deferred so its re-emission can be tagged
+            # (ops clears event.deferred before re-running the handler, so the
+            # event object can't reveal the re-emission).
+            norma.write_pending_reemit(event_name)
             return
         self._reconcile(event)
 
@@ -202,9 +202,12 @@ class NormaK8sCharm(ops.CharmBase):
         event_name = _event_to_kebab(event)
         extra: dict[str, str] = {}
 
-        # Detect re-emitted (deferred) events
-        if getattr(event, "deferred", False):
+        # Tag the re-emission of a previously-deferred event. Match the persisted
+        # pending-reemit name: ops has already reset event.deferred to False by
+        # the time the re-emitted handler runs.
+        if norma.read_pending_reemit() == event_name:
             extra["re-emitted"] = "true"
+            norma.write_pending_reemit("")
 
         # Capture departing unit identity for relation-departed events
         if isinstance(event, ops.RelationDepartedEvent) and event.departing_unit:
