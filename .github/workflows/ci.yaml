@@ -215,6 +215,10 @@ jobs:
           sudo microk8s enable dns hostpath-storage registry
       - name: Push ROCK to local registry
         run: |
+          # `enable registry` returns before the registry serves; pushing at once
+          # fails "pinging container registry localhost:32000".
+          sudo microk8s kubectl -n container-registry rollout status deployment/registry --timeout=180s
+          timeout 60 sh -c 'until curl -fsS http://localhost:32000/v2/ >/dev/null; do sleep 2; done'
           sudo snap install rockcraft --classic
           version=$(awk '/^version:/ {gsub(/"/, "", $2); print $2}' rockcraft.yaml)
           rockcraft.skopeo --insecure-policy copy \
