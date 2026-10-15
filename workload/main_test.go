@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -301,5 +304,100 @@ func TestInstrumentHandlerRecordsStatus(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(httpRequestsTotal.WithLabelValues("GET", "/probe", "418")); got != 1 {
 		t.Errorf("counter for GET /probe 418 = %v, want 1", got)
+	}
+}
+
+// TestNewMuxRoutes pins the public HTTP surface the charms and their tests rely
+// on, including method enforcement (GET-only probes, POST-only toggle).
+func TestNewMuxRoutes(t *testing.T) {
+	setupHealth(t, false)
+	mux := newMux()
+	cases := []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, "/health", http.StatusOK},
+		{http.MethodGet, "/version", http.StatusOK},
+		{http.MethodGet, "/ready", http.StatusOK},
+		{http.MethodGet, "/metrics", http.StatusOK},
+		{http.MethodPost, "/toggle-health", http.StatusOK},
+		{http.MethodGet, "/toggle-health", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/nope", http.StatusNotFound},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		if rec.Code != c.want {
+			t.Errorf("%s %s: got %d, want %d", c.method, c.path, rec.Code, c.want)
+		}
+	}
+}
+
+// TestServeDrainsInFlightRequestOnShutdown pins graceful shutdown (SIGTERM from
+// systemctl stop or Pebble cancels the context): a request already in flight
+// completes, serve returns nil, and new connections are refused afterwards.
+func TestServeDrainsInFlightRequestOnShutdown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	started := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /slow", func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, &http.Server{Handler: mux}, ln) }()
+
+	url := "http://" + ln.Addr().String()
+	reply := make(chan int, 1)
+	go func() {
+		resp, err := http.Get(url + "/slow")
+		if err != nil {
+			reply <- -1
+			return
+		}
+		resp.Body.Close()
+		reply <- resp.StatusCode
+	}()
+	<-started
+	cancel() // shut down while /slow is still in flight
+
+	if code := <-reply; code != http.StatusOK {
+		t.Fatalf("in-flight request: got %d, want 200 (it was dropped, not drained)", code)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serve returned %v, want nil on a clean shutdown", err)
+		}
+	case <-time.After(shutdownGrace + time.Second):
+		t.Fatal("serve did not return after shutdown")
+	}
+	if _, err := http.Get(url + "/slow"); err == nil {
+		t.Fatal("server still accepting connections after shutdown")
+	}
+}
+
+// TestServeReturnsServeError: if serving stops on its own (here: the listener
+// is closed underneath it), serve reports the error instead of hanging.
+func TestServeReturnsServeError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ln.Close()
+	done := make(chan error, 1)
+	go func() { done <- serve(context.Background(), &http.Server{Handler: http.NewServeMux()}, ln) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("serve returned nil for a dead listener")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve hung on a dead listener")
 	}
 }
