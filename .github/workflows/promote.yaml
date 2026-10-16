@@ -1,12 +1,11 @@
 name: Promote charm channel
 
-# Manual channel promotion — typically used to ship a vetted candidate
-# revision to stable, but accepts any from/to combination.
+# Manual channel promotion — typically candidate -> stable for a vetted revision,
+# but accepts any from/to combination. Promotion preserves the charm revision and
+# its attached OCI image resource (no re-pack), so the exact validated bits ship.
 #
-# How to invoke: GitHub UI -> Actions -> "Promote charm channel" ->
-# "Run workflow" button (top right). Pick from_channel and to_channel
-# from the dropdowns. The workflow runs `charmcraft promote` server-side
-# using CHARMHUB_TOKEN — no local charmcraft login required.
+# Invoke: Actions -> "Promote charm channel" -> "Run workflow" -> pick channels.
+# Runs `charmcraft promote` server-side via CHARMHUB_TOKEN.
 
 on:
   workflow_dispatch:
@@ -35,21 +34,37 @@ jobs:
   promote:
     name: Promote ${{ inputs.from_channel }} -> ${{ inputs.to_channel }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
-
       - name: charmcraft promote
         env:
           CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
+          # Through env, never interpolated into the script.
+          FROM_CHANNEL: ${{ inputs.from_channel }}
+          TO_CHANNEL: ${{ inputs.to_channel }}
         run: |
+          set -uo pipefail
           # Refuse same-channel promotions — likely a misclick.
-          if [[ "${{ inputs.from_channel }}" == "${{ inputs.to_channel }}" ]]; then
+          if [[ "$FROM_CHANNEL" == "$TO_CHANNEL" ]]; then
             echo "ERROR: from_channel and to_channel must differ"
             exit 1
           fi
-          charmcraft promote \
+          # Retry transient CharmHub failures (mirrors release-tag / publish-edge).
+          cc() {
+            local rc
+            for attempt in 1 2 3 4 5; do
+              charmcraft "$@" && return 0
+              rc=$?
+              echo "charmcraft $1 attempt $attempt failed (rc=$rc); retrying in 20s" >&2
+              sleep 20
+            done
+            echo "charmcraft $1 failed after 5 attempts" >&2
+            return 1
+          }
+          cc promote \
             --name=juju-norma-k8s \
-            --from-channel=${{ inputs.from_channel }} \
-            --to-channel=${{ inputs.to_channel }} \
+            --from-channel="$FROM_CHANNEL" \
+            --to-channel="$TO_CHANNEL" \
             --yes
