@@ -26,8 +26,11 @@ Environment variables:
     CHARM_PATH          Path to .charm file or directory containing one.
     NORMA_IMAGE         OCI image URI (default: "ghcr.io/sinanawad/juju-norma:latest").
     KEEP_MODEL          Set to "1" to keep the model after tests (debugging).
+    JUJU_DEBUG_LOG_DIR  If set, write per-model ``juju debug-log`` files here
+                        before test models are destroyed.
 """
 
+import json
 import logging
 import os
 import pathlib
@@ -65,9 +68,18 @@ CLOUD_DEFAULT = "mk8s"
 RESOURCE_NAME = "juju-norma-image"
 DEPLOY_RETRIES = 3
 DEPLOY_RETRY_DELAY = 5  # seconds
+# Uniter DEBUG so a commit-time "cannot apply changes" and the charm
+# traceback are present in the debug-log dump.
+MODEL_LOGGING_CONFIG = "<root>=INFO;unit=DEBUG;juju.worker.uniter=DEBUG"
+DEBUG_LOG_TIMEOUT = 120
 
 
-def _deploy_with_retry(j: jubilant.Juju, charm_path: str, oci_image: str) -> None:
+def _deploy_with_retry(
+    j: jubilant.Juju,
+    charm_path: str,
+    oci_image: str,
+    app: str = APP,
+) -> None:
     """Deploy the charm, retrying on the OCI resource race (juju/juju#21456).
 
     The server-side ``deployResources`` races with ``Deploy`` — the resource
@@ -79,7 +91,7 @@ def _deploy_with_retry(j: jubilant.Juju, charm_path: str, oci_image: str) -> Non
         try:
             j.deploy(
                 charm_path,
-                app=APP,
+                app=app,
                 resources={RESOURCE_NAME: oci_image},
             )
             return
@@ -132,6 +144,104 @@ JUJU_EDGE = "edge" in JUJU_CHANNEL
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
+
+
+def _model_short_names(cli: str, controller: str) -> list[str]:
+    """Return model short names from ``juju models --format json``.
+
+    Uses ``short-name``, falling back to ``name``. A qualified ``user/model``
+    name is reduced to its model segment so the dump file stays one path
+    component. Returns an empty list on failure.
+    """
+    try:
+        result = subprocess.run(
+            [cli, "models", "-c", controller, "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=DEBUG_LOG_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("could not list juju models on %s", controller, exc_info=True)
+        return []
+    if result.returncode != 0:
+        logger.warning("juju models failed on %s: %s", controller, result.stderr.strip())
+        return []
+    try:
+        payload = json.loads(result.stdout) if result.stdout.strip() else {}
+    except json.JSONDecodeError:
+        logger.warning("juju models returned non-json on %s", controller)
+        return []
+    entries = payload.get("models", []) if isinstance(payload, dict) else []
+    names: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        raw = entry.get("short-name") or entry.get("name") or ""
+        name = str(raw).rsplit("/", 1)[-1]
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _debug_log_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value
+
+
+def dump_debug_logs(cli: str, controller: str, dest: str | None) -> None:
+    """Write ``juju debug-log --level DEBUG`` for every model. Never raises.
+
+    No-op unless ``JUJU_DEBUG_LOG_DIR`` is set. ``--no-tail`` is required:
+    ``--replay`` on its own follows the log forever. Each model is limited
+    to 120 seconds. The controller model is included even when ``juju models``
+    does not list it.
+    """
+    if not os.environ.get("JUJU_DEBUG_LOG_DIR") or not dest:
+        return
+    try:
+        out_dir = pathlib.Path(dest)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        models = _model_short_names(cli, controller)
+        if "controller" not in models:
+            models.append("controller")
+        for model in models:
+            target = out_dir / f"{model}.log"
+            command = [
+                cli,
+                "debug-log",
+                "-m",
+                f"{controller}:{model}",
+                "--replay",
+                "--no-tail",
+                "--level",
+                "DEBUG",
+            ]
+            try:
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=DEBUG_LOG_TIMEOUT,
+                    check=False,
+                )
+                target.write_text(result.stdout + result.stderr)
+            except subprocess.TimeoutExpired as exc:
+                target.write_text(
+                    _debug_log_text(exc.stdout)
+                    + _debug_log_text(exc.stderr)
+                    + "\n(debug-log timed out)\n"
+                )
+            except OSError as exc:
+                try:
+                    target.write_text(f"debug-log failed: {exc}\n")
+                except OSError:
+                    logger.warning("could not write debug log for %s", model, exc_info=True)
+    except Exception:
+        logger.warning("juju debug-log dump failed", exc_info=True)
 
 
 def kubectl(*args: str, timeout: int = 60):
@@ -233,24 +343,38 @@ def juju(environment_ready, charm_path, oci_image):
     cloud = _env("JUJU_CLOUD", CLOUD_DEFAULT)
     keep = _env("KEEP_MODEL") == "1"
 
+    log_dir = os.environ.get("JUJU_DEBUG_LOG_DIR")
+
     if model:
         j = jubilant.Juju(model=model, cli_binary=cli or "juju")
         status = j.status()
         assert APP in status.apps, f"{APP} not found in model {model}"
-        yield j
+        try:
+            yield j
+        finally:
+            dump_debug_logs(j.cli_binary, controller, log_dir)
         return
 
     if cli:
         # Manual lifecycle — temp_model() ignores cli_binary.
         model_name = f"test-{uuid.uuid4().hex[:8]}"
         no_model = jubilant.Juju(cli_binary=cli)
-        no_model.cli("add-model", model_name, cloud, "-c", controller)
+        no_model.cli(
+            "add-model",
+            model_name,
+            cloud,
+            "-c",
+            controller,
+            "--config",
+            f"logging-config={MODEL_LOGGING_CONFIG}",
+        )
         j = jubilant.Juju(model=model_name, cli_binary=cli)
         try:
             _deploy_with_retry(j, str(charm_path), oci_image)
             j.wait(jubilant.all_active, timeout=300)
             yield j
         finally:
+            dump_debug_logs(cli, controller, log_dir)
             if not keep:
                 no_model.cli(
                     "destroy-model",
@@ -261,7 +385,14 @@ def juju(environment_ready, charm_path, oci_image):
         return
 
     # Default path — let jubilant manage the model.
-    with jubilant.temp_model(controller=controller) as j:
-        _deploy_with_retry(j, str(charm_path), oci_image)
-        j.wait(jubilant.all_active, timeout=300)
-        yield j
+    with jubilant.temp_model(
+        controller=controller,
+        config={"logging-config": MODEL_LOGGING_CONFIG},
+    ) as j:
+        try:
+            _deploy_with_retry(j, str(charm_path), oci_image)
+            j.wait(jubilant.all_active, timeout=300)
+            yield j
+        finally:
+            # Dump before temp_model exits: it destroys the model on the way out.
+            dump_debug_logs(j.cli_binary, controller, log_dir)

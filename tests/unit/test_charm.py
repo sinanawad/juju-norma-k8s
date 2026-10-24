@@ -5,10 +5,12 @@ asserts on the output State, per Constitution Principle VI.
 """
 
 import json
+import logging
 
 import ops
 import ops.testing
 import pytest
+import scenario.mocking
 
 import norma
 from charm import NormaK8sCharm
@@ -2131,6 +2133,74 @@ class TestSecurity:
         assert ctx.action_results["workload-gid"] == "unavailable"
 
 
+# Juju 4.0 secret-grant fails when the remote app has already gone. The
+# grant is queued and may instead fail later, at hook commit, which Python
+# cannot catch. The fake message embeds the secret id the way a real
+# ModelError does, so a log of str(e) fails the caplog assertion.
+_CMR_REMOTE_APP = "remote-0123abcd"
+_CMR_REMOTE_MODEL = "11111111-2222-4333-8444-555555555555"
+
+
+def _cmr_relation(**overrides: object) -> ops.testing.Relation:
+    """A calibration-provider relation shaped like a cross-model consumer."""
+    fields: dict = {
+        "endpoint": "calibration-provider",
+        "remote_app_name": _CMR_REMOTE_APP,
+        "remote_model_uuid": _CMR_REMOTE_MODEL,
+        "remote_units_data": {0: {}},
+    }
+    fields.update(overrides)
+    return ops.testing.Relation(**fields)
+
+
+def _leader_with_secret(*relations: ops.testing.RelationBase) -> ops.testing.State:
+    """Leader state with an app-owned secret id stored on the peer relation."""
+    secret = ops.testing.Secret(
+        {"password": "test-pw"},
+        owner="app",
+        label="calibration-password",
+    )
+    peer = ops.testing.PeerRelation(
+        endpoint="norma-peers",
+        local_app_data={"secret-id": secret.id},
+    )
+    return ops.testing.State(
+        containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        relations=[peer, *relations],
+        secrets=[secret],
+        leader=True,
+    )
+
+
+def _caplog_text(caplog: pytest.LogCaptureFixture) -> str:
+    """Every captured message, including exception text attached to a record."""
+    parts: list[str] = []
+    for record in caplog.records:
+        parts.append(record.getMessage())
+        if record.exc_text:
+            parts.append(record.exc_text)
+    return "\n".join(parts)
+
+
+def _patch_secret_call(monkeypatch: pytest.MonkeyPatch, name: str, fail_for: set[int] | None):
+    """Record secret_grant/secret_revoke calls and raise ModelError for some.
+
+    ``fail_for is None`` raises on every call. Otherwise only those relation ids
+    raise, and the rest run the real scenario implementation.
+    """
+    calls: list[int] = []
+    original = getattr(scenario.mocking._MockModelBackend, name)
+
+    def fake(self, secret_id: str, relation_id: int, *, unit: str | None = None):
+        calls.append(relation_id)
+        if fail_for is None or relation_id in fail_for:
+            raise ops.ModelError(f'secret "{secret_id}" not found')
+        return original(self, secret_id, relation_id, unit=unit)
+
+    monkeypatch.setattr(scenario.mocking._MockModelBackend, name, fake)
+    return calls
+
+
 class TestCMR:
     """US19: Cross-Model Relations — remote app name in event ledger."""
 
@@ -2167,6 +2237,281 @@ class TestCMR:
             ledger = mgr.charm._event_ledger
             rel_events = [e for e in ledger if "relation" in e["event_name"]]
             assert any(e["extra"].get("remote-app") == "other-model-charm" for e in rel_events)
+
+    def test_cmr_departed_grant_error_stays_active(self, monkeypatch):
+        """relation-departed must not grant on the departing relation, or the hook errors."""
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for=None)
+        rel = _cmr_relation(local_unit_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(
+            ctx.on.relation_departed(rel, remote_unit=0, departing_unit=0),
+            _leader_with_secret(rel),
+        )
+        assert out.unit_status == ops.ActiveStatus()
+        assert rel.id not in grants
+
+    def test_departed_does_not_write_event_relation_databag(self):
+        """The departing relation's unit databag is left untouched."""
+        rel = _cmr_relation(local_unit_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(
+            ctx.on.relation_departed(rel, remote_unit=0, departing_unit=0),
+            _leader_with_secret(rel),
+        )
+        assert out.get_relation(rel.id).local_unit_data == {}
+
+    def test_grant_model_error_logged_not_fatal(self, monkeypatch, caplog):
+        """A ModelError granting one relation is logged; the other relation is still granted."""
+        caplog.set_level(logging.WARNING)
+        good = _cmr_relation(id=2, remote_app_name="remote-aaaaaaaa")
+        bad = _cmr_relation(id=3, remote_app_name="remote-bbbbbbbb")
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for={bad.id})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = _leader_with_secret(good, bad)
+        secret_id = state.get_secret(label="calibration-password").id
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert out.unit_status == ops.ActiveStatus()
+        assert good.id in out.get_secret(label="calibration-password").remote_grants
+        assert bad.id in grants
+        warnings = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
+        ]
+        assert any(f"relation {bad.id}" in message for message in warnings)
+        assert secret_id not in _caplog_text(caplog)
+
+    def test_cmr_broken_revoke_error_stays_active(self, monkeypatch, caplog):
+        """A ModelError from secret-revoke on relation-broken is logged and the hook succeeds."""
+        caplog.set_level(logging.WARNING)
+        revokes = _patch_secret_call(monkeypatch, "secret_revoke", fail_for=None)
+        rel = _cmr_relation(id=1)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = _leader_with_secret(rel)
+        secret_id = state.get_secret(label="calibration-password").id
+        out = ctx.run(ctx.on.relation_broken(rel), state)
+        assert rel.id in revokes
+        assert out.unit_status == ops.ActiveStatus()
+        warnings = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
+        ]
+        assert any(f"relation {rel.id}" in message for message in warnings)
+        assert secret_id not in _caplog_text(caplog)
+
+    def test_cmr_joined_still_grants(self):
+        """relation-joined on a live CMR relation still grants the secret."""
+        rel = _cmr_relation()
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_joined(rel, remote_unit=0), _leader_with_secret(rel))
+        assert rel.id in out.get_secret(label="calibration-password").remote_grants
+
+    def test_relation_changed_grants(self):
+        """relation-changed on a joined CMR relation grants the secret."""
+        rel = _cmr_relation()
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_changed(rel), _leader_with_secret(rel))
+        assert rel.id in out.get_secret(label="calibration-password").remote_grants
+
+    def test_relation_created_does_not_grant(self):
+        """relation-created has no remote units yet, so the secret is not granted."""
+        rel = _cmr_relation(remote_units_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_created(rel), _leader_with_secret(rel))
+        granted = out.get_secret(label="calibration-password").remote_grants
+        assert rel.id not in granted
+
+    def test_dead_relation_not_granted(self, monkeypatch):
+        """A relation whose relation-list is not-found (active=False) is not granted."""
+        dead = _cmr_relation(id=7, remote_app_name="remote-deaddead")
+        live = _cmr_relation(id=8, remote_app_name="remote-livelive")
+        original = scenario.mocking._MockModelBackend.relation_list
+
+        def fake(self, relation_id, *, relation_name=None):
+            if relation_id == dead.id:
+                raise ops.RelationNotFoundError()
+            return original(self, relation_id, relation_name=relation_name)
+
+        monkeypatch.setattr(scenario.mocking._MockModelBackend, "relation_list", fake)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.config_changed(), _leader_with_secret(dead, live))
+        granted = out.get_secret(label="calibration-password").remote_grants
+        assert dead.id not in granted
+        assert live.id in granted
+
+    def test_joined_records_granted_relation_id(self):
+        """relation-joined records the relation id so a later hook does not grant again."""
+        rel = _cmr_relation(id=4)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_joined(rel, remote_unit=0), _leader_with_secret(rel))
+        peer = next(relation for relation in out.relations if relation.endpoint == "norma-peers")
+        assert peer.local_app_data["calibration-granted-relations"] == "4"
+        assert rel.id in out.get_secret(label="calibration-password").remote_grants
+
+    def test_relation_changed_does_not_regrant(self, monkeypatch):
+        """A recorded grant is not queued again on relation-changed."""
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for=set())
+        rel = _cmr_relation(id=4, local_unit_data={})
+        secret = ops.testing.Secret(
+            {"password": "test-pw"},
+            owner="app",
+            label="calibration-password",
+        )
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            local_app_data={
+                "secret-id": secret.id,
+                "calibration-granted-relations": str(rel.id),
+            },
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer, rel],
+            secrets=[secret],
+            leader=True,
+        )
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_changed(rel, remote_unit=0), state)
+        assert grants == []
+        assert out.get_relation(rel.id).local_unit_data == {}
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_config_changed_does_not_regrant(self, monkeypatch):
+        """config-changed must not queue a second grant for a relation already granted."""
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for=set())
+        rel = _cmr_relation(id=4)
+        secret = ops.testing.Secret(
+            {"password": "test-pw"},
+            owner="app",
+            label="calibration-password",
+        )
+        peer = ops.testing.PeerRelation(
+            endpoint="norma-peers",
+            local_app_data={
+                "secret-id": secret.id,
+                "calibration-granted-relations": str(rel.id),
+                "cluster-size": "1",
+                "leader-unit": "juju-norma-k8s/0",
+            },
+        )
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[peer, rel],
+            secrets=[secret],
+            leader=True,
+        )
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert grants == []
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_provider_changed_for_departed_unit_does_not_grant(self, monkeypatch):
+        """relation-changed for a remote unit that has left does not grant or write."""
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for=None)
+        rel = _cmr_relation(remote_units_data={}, local_unit_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(
+            ctx.on.relation_changed(rel, remote_unit=0),
+            _leader_with_secret(rel),
+        )
+        assert grants == []
+        assert out.get_relation(rel.id).local_unit_data == {}
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_changed_skips_remote_unit_that_already_left(self, monkeypatch):
+        """A relation-changed unit that is no longer a member is not granted."""
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for=None)
+        rel = _cmr_relation(remote_units_data={1: {}}, local_unit_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(
+            ctx.on.relation_changed(rel, remote_unit=0),
+            _leader_with_secret(rel),
+        )
+        assert grants == []
+        assert out.get_relation(rel.id).local_unit_data == {}
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_requirer_changed_for_departed_unit_does_not_write(self):
+        """The requirer databag is not written once the remote unit has left."""
+        rel = ops.testing.Relation(
+            endpoint="calibration-requirer",
+            remote_app_name=_CMR_REMOTE_APP,
+            remote_units_data={},
+            local_unit_data={},
+        )
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = ops.testing.State(
+            containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+            relations=[rel],
+            leader=True,
+        )
+        out = ctx.run(ctx.on.relation_changed(rel, remote_unit=0), state)
+        assert out.get_relation(rel.id).local_unit_data == {}
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_relation_changed_inactive_skips_grant_and_databag(self, monkeypatch):
+        """relation-changed on a relation-list failure does not grant or write."""
+        rel = _cmr_relation(id=7, local_unit_data={})
+        original = scenario.mocking._MockModelBackend.relation_list
+
+        def fake(self, relation_id, *, relation_name=None):
+            if relation_id == rel.id:
+                raise ops.RelationNotFoundError()
+            return original(self, relation_id, relation_name=relation_name)
+
+        monkeypatch.setattr(scenario.mocking._MockModelBackend, "relation_list", fake)
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for=None)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_changed(rel, remote_unit=0), _leader_with_secret(rel))
+        assert grants == []
+        assert out.get_relation(rel.id).local_unit_data == {}
+        assert out.unit_status == ops.ActiveStatus()
+
+    def test_dead_relation_databag_not_written(self, monkeypatch):
+        """config-changed does not relation-set a relation whose relation-list is not-found."""
+        dead = _cmr_relation(id=7, local_unit_data={})
+        original_list = scenario.mocking._MockModelBackend.relation_list
+        original_set = scenario.mocking._MockModelBackend.relation_set
+
+        def fake_list(self, relation_id, *, relation_name=None):
+            if relation_id == dead.id:
+                raise ops.RelationNotFoundError()
+            return original_list(self, relation_id, relation_name=relation_name)
+
+        def fake_set(self, relation_id, data, is_app, *, relation_name=None):
+            if relation_id == dead.id:
+                raise AssertionError("relation-set on a dead calibration relation")
+            return original_set(self, relation_id, data, is_app, relation_name=relation_name)
+
+        monkeypatch.setattr(scenario.mocking._MockModelBackend, "relation_list", fake_list)
+        monkeypatch.setattr(scenario.mocking._MockModelBackend, "relation_set", fake_set)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.config_changed(), _leader_with_secret(dead))
+        assert out.unit_status == ops.ActiveStatus()
+        assert out.get_relation(dead.id).local_unit_data == {}
+
+    def test_relation_not_found_on_write_stays_active(self, monkeypatch, caplog):
+        """relation-set not-found is logged and does not error the unit."""
+        caplog.set_level(logging.WARNING)
+        rel = _cmr_relation(id=4, local_unit_data={})
+        state = _leader_with_secret(rel)
+        secret_id = state.get_secret(label="calibration-password").id
+        original = scenario.mocking._MockModelBackend.relation_set
+
+        def fake(self, relation_id, data, is_app, *, relation_name=None):
+            if relation_id == rel.id:
+                raise ops.RelationNotFoundError(f'secret "{secret_id}" not found')
+            return original(self, relation_id, data, is_app, relation_name=relation_name)
+
+        monkeypatch.setattr(scenario.mocking._MockModelBackend, "relation_set", fake)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert out.unit_status == ops.ActiveStatus()
+        warnings = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
+        ]
+        assert any(
+            f"relation {rel.id}" in message and "RelationNotFoundError" in message
+            for message in warnings
+        )
+        assert secret_id not in _caplog_text(caplog)
 
 
 class TestDeferral:

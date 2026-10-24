@@ -23,6 +23,24 @@ import norma
 
 logger = logging.getLogger(__name__)
 
+_CMR_ENDPOINTS = ("calibration-provider", "calibration-requirer")
+# Peer-app databag. Relation ids only — never a secret id or URI.
+_GRANTED_RELATIONS_KEY = "calibration-granted-relations"
+
+
+def _parse_granted_relation_ids(raw: str) -> set[int]:
+    """Relation ids that already had secret-grant queued on an earlier hook."""
+    granted: set[int] = set()
+    for part in raw.split(","):
+        piece = part.strip()
+        if piece.isdigit():
+            granted.add(int(piece))
+    return granted
+
+
+def _format_granted_relation_ids(ids: set[int]) -> str:
+    return ",".join(str(rel_id) for rel_id in sorted(ids))
+
 
 def _event_to_kebab(event: ops.EventBase) -> str:
     """Convert an event class name to kebab-case for the event ledger."""
@@ -247,27 +265,42 @@ class NormaK8sCharm(ops.CharmBase):
         self._maybe_trigger_hook_error()
         self._maybe_trigger_stuck_dying(event)
 
-        # Identify the broken relation (if any) so grant logic skips it
-        broken_relation: ops.Relation | None = None
+        # Departed, broken, and already-gone relation-changed events must
+        # not be granted or written. secret-grant is applied at hook commit;
+        # a ModelError handler cannot stop a grant that was already queued.
+        # Do not call relation-model-get on this path: every extra hook
+        # tool against a dying relation is another way for the hook to fail.
+        skip = self._relations_to_skip(event)
+        # Revoke only while a remote app remains. With no remote app there is
+        # nothing to revoke, and Juju removes relation-scoped grants together
+        # with the relation.
         if (
             isinstance(event, ops.RelationBrokenEvent)
             and event.relation.name == "calibration-provider"
+            and event.app is not None
+            and self.unit.is_leader()
         ):
-            broken_relation = event.relation
-            # Revoke secret access for the broken relation
-            if self.unit.is_leader():
-                peer = self.model.get_relation("norma-peers")
-                if peer:
-                    secret_id = peer.data[self.app].get("secret-id")
-                    if secret_id:
-                        try:
-                            secret = self.model.get_secret(id=secret_id)
-                            secret.revoke(event.relation)
-                        except ops.SecretNotFoundError:
-                            pass
+            peer = self.model.get_relation("norma-peers")
+            if peer:
+                secret_id = peer.data[self.app].get("secret-id")
+                if secret_id:
+                    try:
+                        secret = self.model.get_secret(id=secret_id)
+                        secret.revoke(event.relation)
+                    except ops.SecretNotFoundError:
+                        pass
+                    except ops.ModelError as e:
+                        # SecretNotFoundError is a ModelError subclass and
+                        # must stay the first handler. Log the type only:
+                        # ModelError text can contain the secret URI.
+                        logger.warning(
+                            "secret revoke failed for relation %d: %s",
+                            event.relation.id,
+                            type(e).__name__,
+                        )
 
         # Update relation data first — independent of workload readiness
-        self._update_relation_data(broken_relation=broken_relation)
+        self._update_relation_data(event, skip=skip)
 
         version = self._get_charm_version()
 
@@ -558,13 +591,15 @@ class NormaK8sCharm(ops.CharmBase):
                 "failure per §4c.1 hook firing protocol"
             )
 
-    def _inject_bad_relation_data(self, broken_relation: ops.Relation | None) -> None:
+    def _inject_bad_relation_data(self, skip: frozenset[int]) -> None:
         """If bad-behavior-mode == secret-in-relation, write plaintext
         cryptographic-looking material into the calibration-provider
         relation databag from the leader.
 
         Call this from _update_relation_data on the leader, after the
-        legitimate relation data has been written.
+        legitimate relation data has been written. Relations in ``skip``
+        are dying; a relation-set against them is committed with the hook
+        and can fail it.
         """
         if self._bad_mode() != "secret-in-relation":
             return
@@ -574,10 +609,17 @@ class NormaK8sCharm(ops.CharmBase):
         # credentials there are accessible to any unit on the relation
         # and survive `juju show-unit` indefinitely.
         for rel in self.model.relations.get("calibration-provider", []):
-            if rel == broken_relation:
+            if rel.id in skip or not rel.active:
                 continue
-            rel.data[self.app]["password"] = "hunter2"
-            rel.data[self.app]["api-key"] = "AKIAIOSFODNN7EXAMPLE"
+            try:
+                rel.data[self.app]["password"] = "hunter2"
+                rel.data[self.app]["api-key"] = "AKIAIOSFODNN7EXAMPLE"
+            except ops.RelationNotFoundError as e:
+                logger.warning(
+                    "relation data write skipped for relation %d: %s",
+                    rel.id,
+                    type(e).__name__,
+                )
 
     # ------------------------------------------------------------------ #
     #  Actions                                                            #
@@ -1349,6 +1391,63 @@ class NormaK8sCharm(ops.CharmBase):
     #  Helpers                                                            #
     # ------------------------------------------------------------------ #
 
+    def _calibration_changed_is_departing(self, event: ops.RelationChangedEvent) -> bool:
+        """True when relation-changed is for a calibration peer that has left.
+
+        Force-removing an offer can deliver relation-changed, not only
+        relation-departed or relation-broken, once the remote unit or app
+        is gone. The grant and the databag write are applied at hook commit,
+        so they have to be skipped before they are queued.
+        """
+        rel = event.relation
+        if rel.name not in _CMR_ENDPOINTS:
+            return False
+        if not rel.active or not rel.units:
+            return True
+        remote_unit = event.unit
+        if remote_unit is not None and remote_unit not in rel.units:
+            return True
+        remote_app = event.app
+        return remote_app is not None and all(
+            unit.app.name != remote_app.name for unit in rel.units
+        )
+
+    def _relations_to_skip(self, event: ops.EventBase) -> frozenset[int]:
+        """Relation ids that must not be granted or written during this event.
+
+        secret-grant and relation-set are queued and applied when the hook
+        commits. On Juju 4.0 a grant or write against a departing or broken
+        relation fails the hook, sometimes only at commit time, where Python
+        cannot catch it. Skip the relation instead of touching it.
+
+        calibration-provider and calibration-requirer are skipped on every
+        relation-departed, not only when the last remote unit leaves:
+        grants are app-scoped and already happened on created/joined/changed,
+        the databag values (unit-name, role) do not change, and the immediate
+        failure mode fails the first departed event while other units remain.
+        ``departing_unit == self.unit`` is the same relation when this unit
+        is the one leaving; the calibration rule already covers it.
+
+        relation-changed is included when that relation is missing, inactive,
+        or the remote unit/app in the event is no longer a member. A live
+        relation-changed is not skipped here; a second secret-grant is
+        suppressed from the peer record instead, because the relation is
+        still active while the charm runs.
+        """
+        skip: set[int] = set()
+        if isinstance(event, ops.RelationBrokenEvent):
+            skip.add(event.relation.id)
+        if isinstance(event, ops.RelationDepartedEvent):
+            if event.relation.name in _CMR_ENDPOINTS:
+                skip.add(event.relation.id)
+            if event.departing_unit == self.unit:
+                skip.add(event.relation.id)
+        if isinstance(event, ops.RelationChangedEvent) and self._calibration_changed_is_departing(
+            event
+        ):
+            skip.add(event.relation.id)
+        return frozenset(skip)
+
     def _log_event(self, event_name: str, extra: dict[str, str] | None = None) -> None:
         """Append an event to the event ledger and persist to disk."""
         self._event_ledger.append(
@@ -1362,14 +1461,20 @@ class NormaK8sCharm(ops.CharmBase):
         norma.write_event_ledger(self._event_ledger)
         logger.info("Event: %s on %s", event_name, self.unit.name)
 
-    def _update_relation_data(self, *, broken_relation: ops.Relation | None = None) -> None:
+    def _update_relation_data(
+        self, event: ops.EventBase, *, skip: frozenset[int] = frozenset()
+    ) -> None:
         """Update peer and calibration relation data (idempotent).
 
         Only writes when values change to avoid relation-changed feedback loops.
 
         Args:
-            broken_relation: The relation being broken (if any). Grant logic
-                skips this relation to avoid re-granting after a revoke.
+            event: The event being reconciled. The relation-changed that
+                follows a committed grant must not queue another grant or
+                databag write for that relation.
+            skip: Relation ids that must not be granted or written. These are
+                departing, broken, or already gone. A queued secret-grant or
+                relation-set against them fails the hook when it commits.
         """
         peer = self.model.get_relation("norma-peers")
         if peer:
@@ -1397,32 +1502,78 @@ class NormaK8sCharm(ops.CharmBase):
                 if any(existing_app.get(k) != v for k, v in app_data.items()):
                     existing_app.update(app_data)
 
-        # Grant secret access to calibration-provider relations (skip broken)
+        # Ids granted on an earlier committed hook. A follow-up
+        # relation-changed still sees a live relation, so `active` cannot
+        # tell that remove-offer is deleting it before this hook commits.
+        # Queuing a second grant then fails with "relation not found".
+        already_granted: set[int] = set()
+        if peer is not None:
+            already_granted = _parse_granted_relation_ids(
+                peer.data[self.app].get(_GRANTED_RELATIONS_KEY, "")
+            )
+
+        # Grant secret access to live calibration-provider relations.
+        # An empty unit set means the relation is dying or not yet joined:
+        # ops exposes no relation life. One ModelError must not stop grants
+        # to the other relations, and must not fail the hook. Log the
+        # exception type only: the message can contain the secret URI.
+        newly_granted: set[int] = set()
         if peer and self.unit.is_leader():
             secret_id = peer.data[self.app].get("secret-id")
             if secret_id:
                 try:
                     secret = self.model.get_secret(id=secret_id)
-                    for rel in self.model.relations.get("calibration-provider", []):
-                        if rel is not broken_relation:
-                            secret.grant(rel)
                 except ops.SecretNotFoundError:
-                    pass
+                    secret = None
+                if secret is not None:
+                    for rel in self.model.relations.get("calibration-provider", []):
+                        if rel.id in skip or not rel.active or not rel.units:
+                            continue
+                        if rel.id in already_granted:
+                            continue
+                        try:
+                            secret.grant(rel)
+                        except ops.ModelError as e:
+                            logger.warning(
+                                "secret grant failed for relation %d: %s",
+                                rel.id,
+                                type(e).__name__,
+                            )
+                            continue
+                        newly_granted.add(rel.id)
+            present = {rel.id for rel in self.model.relations.get("calibration-provider", [])}
+            desired = (already_granted & present) | newly_granted
+            if desired != already_granted:
+                peer.data[self.app][_GRANTED_RELATIONS_KEY] = _format_granted_relation_ids(desired)
 
-        for endpoint in ("calibration-provider", "calibration-requirer"):
+        for endpoint in _CMR_ENDPOINTS:
             for rel in self.model.relations.get(endpoint, []):
+                if rel.id in skip or not rel.active:
+                    continue
+                # Same follow-up relation-changed as the grant skip. The local
+                # keys do not change, and a queued relation-set fails the hook
+                # if the relation disappears before commit.
+                if isinstance(event, ops.RelationChangedEvent) and rel.id in already_granted:
+                    continue
                 cal_data = {
                     "unit-name": self.unit.name,
                     "role": endpoint.split("-")[-1],
                 }
-                existing_cal = rel.data[self.unit]
-                if any(existing_cal.get(k) != v for k, v in cal_data.items()):
-                    existing_cal.update(cal_data)
+                try:
+                    existing_cal = rel.data[self.unit]
+                    if any(existing_cal.get(k) != v for k, v in cal_data.items()):
+                        existing_cal.update(cal_data)
+                except ops.RelationNotFoundError as e:
+                    logger.warning(
+                        "relation data write skipped for relation %d: %s",
+                        rel.id,
+                        type(e).__name__,
+                    )
 
         # Test-bed: optionally poison the relation databag
         # with plaintext "credentials" so a future detector can spot
         # the §4c.4 anti-pattern.
-        self._inject_bad_relation_data(broken_relation)
+        self._inject_bad_relation_data(skip)
 
     def _get_charm_version(self) -> str:
         """Read charm version from the version file written by charmcraft."""
