@@ -242,13 +242,20 @@ jobs:
           # login), so use sudo here; locally the helper defaults to plain
           # `microk8s kubectl`.
           KUBECTL: "sudo microk8s kubectl"
+          # pytest writes these before it destroys its models. The failure step
+          # below covers a step timeout that kills pytest before finalizers run.
+          JUJU_DEBUG_LOG_DIR: ${{ github.workspace }}/juju-debug-logs
       # Machine-readable per-channel pass/fail record — the deliverable for a
       # calibration charm. Uploaded even on failure (`if: always()`); pytest
       # writes report.xml regardless of test outcome.
       - name: Compute report name
         if: always()
         id: report
-        run: echo "name=test-report-$(echo '${{ matrix.channel }}-${{ matrix.mode }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+        run: |
+          slug=$(echo '${{ matrix.channel }}-${{ matrix.mode }}' | tr '/' '-')
+          echo "name=test-report-${slug}" >> "$GITHUB_OUTPUT"
+          # Must not match test-report-*: nightly-verdict downloads that pattern.
+          echo "debug_name=juju-debug-log-${slug}" >> "$GITHUB_OUTPUT"
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -258,6 +265,35 @@ jobs:
           # `error`, not `warn`: a leg that produced no report has NOT passed, and
           # a silently-missing report is exactly how a red matrix reads as green.
           if-no-files-found: error
+      # Same model loop as dump_debug_logs. || true throughout: this step exists
+      # to salvage logs, and must not replace the integration failure.
+      - name: Dump juju debug logs
+        if: failure()
+        timeout-minutes: 10
+        run: |
+          set +e
+          dest="${{ github.workspace }}/juju-debug-logs"
+          mkdir -p "$dest" || true
+          cli="${JUJU_CLI:-juju}"
+          ctrl="${JUJU_CONTROLLER:-microk8s-localhost}"
+          # One physical line: a multiline python -c string would include this
+          # step's YAML indent and fail with IndentationError.
+          py='import json,sys; raw=sys.stdin.read(); data={}; exec("try:\n data=json.loads(raw) if raw.strip() else {}\nexcept Exception:\n data={}"); entries=(data.get("models") or []) if isinstance(data, dict) else []; names=[]; [names.append(n) for e in entries if isinstance(e, dict) for n in [str((e.get("short-name") or e.get("name") or "")).rsplit("/", 1)[-1]] if n and n not in names]; print("\n".join(names if "controller" in names else names+["controller"]))'
+          models=$("$cli" models -c "$ctrl" --format json | python3 -c "$py" || true)
+          printf '%s\n' "$models" | while IFS= read -r model; do
+            [ -n "$model" ] || continue
+            timeout 120 "$cli" debug-log -m "${ctrl}:${model}" --replay --no-tail --level DEBUG \
+              > "${dest}/${model}.log" 2>&1 || true
+          done
+          exit 0
+      - name: Upload juju debug logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.report.outputs.debug_name }}
+          path: juju-debug-logs/
+          if-no-files-found: warn
+          retention-days: 7
 
   # Deliver the nightly verdict. Producing the per-channel pass/fail record is
   # not the same as delivering it: the matrix ran red for 42 consecutive nights
