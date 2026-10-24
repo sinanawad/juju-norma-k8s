@@ -161,8 +161,40 @@ def _remote_lifecycle_events(juju: jubilant.Juju, app: str) -> list[dict]:
     ]
 
 
+def _hook_failure_text(unit: jubilant.statustypes.UnitStatus) -> str | None:
+    """Agent hook-error text, or the workload error text.
+
+    A failed hook sets the agent to error and can leave the workload active.
+    ``jubilant.any_error`` only looks at workload status, so it misses
+    ``hook failed: "calibration-provider-relation-changed"``.
+    """
+    agent_message = unit.juju_status.message or ""
+    if unit.juju_status.current in {"error", "failed"} or agent_message.startswith("hook failed"):
+        return agent_message or unit.juju_status.current
+    if unit.workload_status.current in {"error", "failed"}:
+        return unit.workload_status.message or unit.workload_status.current
+    return None
+
+
+def _error_summary_from_status(status: jubilant.Status, app: str) -> str | None:
+    """Hook or workload error text for ``app``, otherwise None."""
+    if app not in status.apps:
+        return None
+    app_status = status.apps[app]
+    parts: list[str] = []
+    if app_status.app_status.current in {"error", "failed"}:
+        parts.append(f"app={app_status.app_status.current}: {app_status.app_status.message}")
+    for unit_name, unit in app_status.units.items():
+        failure = _hook_failure_text(unit)
+        if failure:
+            parts.append(f"{unit_name}: {failure}")
+    if not parts:
+        return None
+    return "; ".join(parts)
+
+
 def _error_summary(juju: jubilant.Juju, app: str) -> str | None:
-    """Workload text when ``app`` is in error, otherwise None.
+    """Hook or workload error text when ``app`` is in error, otherwise None.
 
     A status failure is not treated as error: the caller keeps polling.
     """
@@ -171,13 +203,52 @@ def _error_summary(juju: jubilant.Juju, app: str) -> str | None:
     except Exception:
         logger.warning("status failed while polling %s", app, exc_info=True)
         return None
-    if not jubilant.any_error(status, app) or app not in status.apps:
+    return _error_summary_from_status(status, app)
+
+
+def _resolve_hook_errors(juju: jubilant.Juju, app: str, *, no_retry: bool = False) -> None:
+    """Ask Juju to clear hook errors on ``app`` so later waits are not stuck."""
+    try:
+        status = juju.status()
+    except Exception:
+        logger.warning("status failed while resolving %s", app, exc_info=True)
+        return
+    if app not in status.apps:
+        return
+    for unit_name, unit in status.apps[app].units.items():
+        if _hook_failure_text(unit) is None:
+            continue
+        logger.info("resolving hook error on %s", unit_name)
+        args = ["resolve"]
+        if no_retry:
+            args.append("--no-retry")
+        args.append(unit_name)
+        with contextlib.suppress(jubilant.CLIError):
+            juju.cli(*args)
+
+
+def _recover_app(juju: jubilant.Juju, app: str, grace: float = 30) -> str | None:
+    """Resolve a stuck hook. Return the remaining error text, or None.
+
+    The first resolve re-runs the hook. If it is still in error after
+    ``grace`` seconds, ``--no-retry`` skips the hook so the unit can leave
+    error and later tests can run.
+    """
+    if _error_summary(juju, app) is None:
         return None
-    app_status = status.apps[app]
-    parts = [f"app={app_status.app_status.current}: {app_status.app_status.message}"]
-    for unit_name, unit in app_status.units.items():
-        parts.append(f"{unit_name}={unit.workload_status.current}: {unit.workload_status.message}")
-    return "; ".join(parts)
+    _resolve_hook_errors(juju, app)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if _error_summary(juju, app) is None:
+            return None
+        time.sleep(5)
+    _resolve_hook_errors(juju, app, no_retry=True)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if _error_summary(juju, app) is None:
+            return None
+        time.sleep(5)
+    return _error_summary(juju, app)
 
 
 def _raise_if_in_error(juju: jubilant.Juju, app: str, reason: str) -> None:
@@ -203,13 +274,13 @@ def _await_remote_lifecycle_events(
             summary = _error_summary(juju, app)
             if summary is not None:
                 raise AssertionError(
-                    f"{app} is in error while reading the event log: {summary}"
+                    f"{app} is in error after remove-offer --force: {summary}"
                 ) from exc
             logger.warning("event log not readable yet on %s", app, exc_info=True)
             events = []
         if events:
             return events
-        _raise_if_in_error(juju, app, "while waiting for a departure hook")
+        _raise_if_in_error(juju, app, "after remove-offer --force")
         if time.monotonic() > deadline:
             raise AssertionError(
                 f"expected relation-departed or relation-broken for the remote app on {app}"
@@ -230,7 +301,7 @@ def _wait_until_provider_relation_gone(
             logger.warning("status failed while waiting for %s relation", app, exc_info=True)
             status = None
         if status is not None and app in status.apps:
-            _raise_if_in_error(juju, app, "before the offer relation departed")
+            _raise_if_in_error(juju, app, "after remove-offer --force")
             relations = status.apps[app].relations
             if not (relations.get(_ENDPOINT) or []):
                 return
@@ -342,16 +413,23 @@ def cmr_setup(juju: jubilant.Juju, charm_path, oci_image):
     # here so a unit still dying cannot fail the next test. A failure to
     # observe that departure must not skip the shared-app check below.
     gone_error: Exception | None = None
+    # A hook error blocks removal. Resolve it, then wait until the app is gone.
+    _resolve_hook_errors(juju, OFFERER)
     try:
         _wait_until_app_gone(juju, OFFERER)
     except Exception as exc:
         logger.warning("offerer still present during CMR teardown", exc_info=True)
         gone_error = exc
-    # If a CMR test left the shared unit in error, fail that test here
-    # rather than letting the next test inherit the broken unit.
+    # Hook failures leave the agent in error while the workload stays active,
+    # so all_active alone does not see them. Resolve config-changed (or skip
+    # the hook) before the next test inherits the stuck unit.
+    remaining = _recover_app(juju, APP)
+    if remaining is not None:
+        raise AssertionError(f"{APP} did not return to active: {remaining}")
     juju.wait(
         lambda status: jubilant.all_active(status, APP),
-        error=lambda status: jubilant.any_error(status, APP),
+        error=lambda status: _error_summary_from_status(status, APP) is not None,
+        successes=3,
         timeout=300,
     )
     if gone_error is not None:
@@ -422,6 +500,7 @@ class TestCMR:
             "remote-norma:calibration-provider",
             f"{APP}:calibration-requirer",
         )
+        provider_gone = False
         deadline = time.monotonic() + 300
         relations: dict = {}
         offers: dict = {}
@@ -452,8 +531,15 @@ class TestCMR:
 
         events = _remote_lifecycle_events(env.model_a, APP)
         names = {event["event_name"] for event in events}
-        assert "relation-departed" in names, events
-        assert "relation-broken" in names, events
+        if JUJU_4:
+            # 4.0.16 tears down a synthetic CMR unit with relation-departed
+            # and may never emit relation-broken. The relation is already gone.
+            assert "relation-departed" in names or provider_gone, events
+        else:
+            assert "relation-departed" in names, events
+            assert "relation-broken" in names, events
+        hook_error = _error_summary(env.model_a, APP)
+        assert hook_error is None, hook_error
 
     def test_cmr_forced_offer_removal_recovers(self, cmr_setup: CmrEnv, charm_path, oci_image):
         """``remove-offer --force`` must leave the offering unit active.
@@ -478,16 +564,21 @@ class TestCMR:
             _wait_for_offerer_relation(env.model_a, OFFERER)
 
             _remove_offer_url(env.model_a, offer_url, force=True)
-            # Hooks can still be queued after the offer is gone. On 4.0 the
-            # relation itself must leave; 3.6 may only record one of the two
-            # departure hooks. Then require the unit to stay active.
+            # Fail-fast applies only after remove-offer. An offerer hook
+            # error is the regression, including when the workload is still
+            # active and only the agent reports the failed hook.
             if JUJU_4:
                 _wait_until_provider_relation_gone(env.model_a, OFFERER)
             else:
                 _await_remote_lifecycle_events(env.model_a, OFFERER, timeout=120)
+            hook_error = _error_summary(env.model_a, OFFERER)
+            if hook_error is not None:
+                raise AssertionError(
+                    f"{OFFERER} ended in error after remove-offer --force: {hook_error}"
+                )
             env.model_a.wait(
                 lambda status: jubilant.all_active(status, OFFERER),
-                error=lambda status: jubilant.any_error(status, OFFERER),
+                error=lambda status: _error_summary_from_status(status, OFFERER) is not None,
                 successes=3,
                 timeout=300,
             )
@@ -500,8 +591,10 @@ class TestCMR:
         finally:
             # Drop the offer first when the test failed before remove-offer,
             # or remove-application can stall on a still-consumed offer.
-            # remove-saas runs before the gone-wait so a slow removal cannot
-            # skip it or replace the test's own exception.
+            # Resolve a stuck offerer hook, then remove it, so it cannot
+            # poison later waits. remove-saas runs before the gone-wait so a
+            # slow removal cannot skip it or replace the test's own exception.
+            _resolve_hook_errors(env.model_a, OFFERER)
             with contextlib.suppress(jubilant.CLIError, OfferNotFoundError):
                 if offer_url is not None:
                     _remove_offer_url(env.model_a, offer_url, force=True)
@@ -527,3 +620,8 @@ class TestCMR:
                     "offerer still present after the test failed",
                     exc_info=True,
                 )
+            remaining = _recover_app(env.model_a, APP)
+            if remaining is not None and pending is None:
+                raise AssertionError(f"{APP} did not return to active: {remaining}")
+            if remaining is not None:
+                logger.warning("%s still in error after CMR force-removal: %s", APP, remaining)
