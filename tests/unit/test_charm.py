@@ -5,10 +5,12 @@ asserts on the output State, per Constitution Principle VI.
 """
 
 import json
+import logging
 
 import ops
 import ops.testing
 import pytest
+import scenario.mocking
 
 import norma
 from charm import NormaK8sCharm
@@ -2131,6 +2133,64 @@ class TestSecurity:
         assert ctx.action_results["workload-gid"] == "unavailable"
 
 
+# Juju 4.0 secret-grant fails with this ModelError when the remote app has
+# already gone ("expected only 1 subject, got 0"). The grant is queued and
+# may instead fail later, at hook commit, which Python cannot catch.
+_GRANT_SUBJECT_ERROR = "expected only 1 subject, got 0"
+_CMR_REMOTE_APP = "remote-0123abcd"
+_CMR_REMOTE_MODEL = "11111111-2222-4333-8444-555555555555"
+
+
+def _cmr_relation(**overrides: object) -> ops.testing.Relation:
+    """A calibration-provider relation shaped like a cross-model consumer."""
+    fields: dict = {
+        "endpoint": "calibration-provider",
+        "remote_app_name": _CMR_REMOTE_APP,
+        "remote_model_uuid": _CMR_REMOTE_MODEL,
+        "remote_units_data": {0: {}},
+    }
+    fields.update(overrides)
+    return ops.testing.Relation(**fields)
+
+
+def _leader_with_secret(*relations: ops.testing.RelationBase) -> ops.testing.State:
+    """Leader state with an app-owned secret id stored on the peer relation."""
+    secret = ops.testing.Secret(
+        {"password": "test-pw"},
+        owner="app",
+        label="calibration-password",
+    )
+    peer = ops.testing.PeerRelation(
+        endpoint="norma-peers",
+        local_app_data={"secret-id": secret.id},
+    )
+    return ops.testing.State(
+        containers=[NORMA_CONTAINER, NORMA_SECONDARY],
+        relations=[peer, *relations],
+        secrets=[secret],
+        leader=True,
+    )
+
+
+def _patch_secret_call(monkeypatch: pytest.MonkeyPatch, name: str, fail_for: set[int] | None):
+    """Record secret_grant/secret_revoke calls and raise ModelError for some.
+
+    ``fail_for is None`` raises on every call. Otherwise only those relation ids
+    raise, and the rest run the real scenario implementation.
+    """
+    calls: list[int] = []
+    original = getattr(scenario.mocking._MockModelBackend, name)
+
+    def fake(self, secret_id: str, relation_id: int, *, unit: str | None = None):
+        calls.append(relation_id)
+        if fail_for is None or relation_id in fail_for:
+            raise ops.ModelError(_GRANT_SUBJECT_ERROR)
+        return original(self, secret_id, relation_id, unit=unit)
+
+    monkeypatch.setattr(scenario.mocking._MockModelBackend, name, fake)
+    return calls
+
+
 class TestCMR:
     """US19: Cross-Model Relations — remote app name in event ledger."""
 
@@ -2167,6 +2227,86 @@ class TestCMR:
             ledger = mgr.charm._event_ledger
             rel_events = [e for e in ledger if "relation" in e["event_name"]]
             assert any(e["extra"].get("remote-app") == "other-model-charm" for e in rel_events)
+
+    def test_cmr_departed_grant_error_stays_active(self, monkeypatch):
+        """relation-departed must not grant on the departing relation, or the hook errors."""
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for=None)
+        rel = _cmr_relation(local_unit_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(
+            ctx.on.relation_departed(rel, remote_unit=0, departing_unit=0),
+            _leader_with_secret(rel),
+        )
+        assert out.unit_status == ops.ActiveStatus()
+        assert rel.id not in grants
+
+    def test_departed_does_not_write_event_relation_databag(self):
+        """The departing relation's unit databag is left untouched."""
+        rel = _cmr_relation(local_unit_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(
+            ctx.on.relation_departed(rel, remote_unit=0, departing_unit=0),
+            _leader_with_secret(rel),
+        )
+        assert out.get_relation(rel.id).local_unit_data == {}
+
+    def test_grant_model_error_logged_not_fatal(self, monkeypatch, caplog):
+        """A ModelError granting one relation is logged; the other relation is still granted."""
+        caplog.set_level(logging.WARNING)
+        good = _cmr_relation(id=2, remote_app_name="remote-aaaaaaaa")
+        bad = _cmr_relation(id=3, remote_app_name="remote-bbbbbbbb")
+        grants = _patch_secret_call(monkeypatch, "secret_grant", fail_for={bad.id})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        state = _leader_with_secret(good, bad)
+        secret_id = state.get_secret(label="calibration-password").id
+        out = ctx.run(ctx.on.config_changed(), state)
+        assert out.unit_status == ops.ActiveStatus()
+        assert good.id in out.get_secret(label="calibration-password").remote_grants
+        assert bad.id in grants
+        warnings = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
+        ]
+        assert any(f"relation {bad.id}" in message for message in warnings)
+        assert all(secret_id not in message for message in warnings)
+
+    def test_cmr_broken_revoke_error_stays_active(self, monkeypatch, caplog):
+        """A ModelError from secret-revoke on relation-broken is logged and the hook succeeds."""
+        caplog.set_level(logging.WARNING)
+        revokes = _patch_secret_call(monkeypatch, "secret_revoke", fail_for=None)
+        rel = _cmr_relation(id=1)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_broken(rel), _leader_with_secret(rel))
+        assert rel.id in revokes
+        assert out.unit_status == ops.ActiveStatus()
+        warnings = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
+        ]
+        assert any(f"relation {rel.id}" in message for message in warnings)
+
+    def test_cmr_joined_still_grants(self):
+        """relation-joined on a live CMR relation still grants the secret."""
+        rel = _cmr_relation()
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_joined(rel, remote_unit=0), _leader_with_secret(rel))
+        assert rel.id in out.get_secret(label="calibration-password").remote_grants
+
+    def test_dead_relation_not_granted(self, monkeypatch):
+        """A relation whose relation-list is not-found (active=False) is not granted."""
+        dead = _cmr_relation(id=7, remote_app_name="remote-deaddead")
+        live = _cmr_relation(id=8, remote_app_name="remote-livelive")
+        original = scenario.mocking._MockModelBackend.relation_list
+
+        def fake(self, relation_id, *, relation_name=None):
+            if relation_id == dead.id:
+                raise ops.RelationNotFoundError()
+            return original(self, relation_id, relation_name=relation_name)
+
+        monkeypatch.setattr(scenario.mocking._MockModelBackend, "relation_list", fake)
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.config_changed(), _leader_with_secret(dead, live))
+        granted = out.get_secret(label="calibration-password").remote_grants
+        assert dead.id not in granted
+        assert live.id in granted
 
 
 class TestDeferral:
