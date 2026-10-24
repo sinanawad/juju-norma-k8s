@@ -101,16 +101,73 @@ def _remote_lifecycle_events(juju: jubilant.Juju, app: str) -> list[dict]:
     ]
 
 
+def _await_remote_lifecycle_events(
+    juju: jubilant.Juju, app: str, timeout: float = 120
+) -> list[dict]:
+    """Poll until a remote departure hook is in the ledger.
+
+    ``all_active`` can succeed before relation-departed or relation-broken
+    has run. A failed ``get-event-log`` while that hook is in progress is
+    retried until the timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            events = _remote_lifecycle_events(juju, app)
+        except Exception:
+            logger.warning("event log not readable yet on %s", app, exc_info=True)
+            events = []
+        if events:
+            return events
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"expected relation-departed or relation-broken for the remote app on {app}"
+            )
+        time.sleep(5)
+
+
+def _provider_has_remote_unit(relations: str) -> bool:
+    """True when introspect shows calibration-provider with a remote unit."""
+    try:
+        payload = json.loads(relations) if relations else {}
+    except json.JSONDecodeError:
+        return False
+    providers = payload.get("calibration-provider") if isinstance(payload, dict) else None
+    if not isinstance(providers, list):
+        return False
+    return any(isinstance(rel, dict) and rel.get("remote-units") for rel in providers)
+
+
 def _wait_for_offerer_relation(juju: jubilant.Juju, app: str) -> None:
-    """Poll introspect until the provider relation has propagated."""
+    """Poll introspect until the provider relation has a remote unit."""
     relations = ""
     for _ in range(18):  # ~90s
         task = juju.run(f"{app}/leader", "introspect", params={"sections": "relations"})
         relations = task.results.get("relations", "") if task.success else ""
-        if "calibration-provider" in relations:
+        if _provider_has_remote_unit(relations):
             return
         time.sleep(5)
-    raise AssertionError(f"calibration-provider relation did not propagate to {app}: {relations}")
+    raise AssertionError(
+        f"calibration-provider relation with a remote unit did not propagate to {app}: {relations}"
+    )
+
+
+def _wait_until_app_gone(juju: jubilant.Juju, app: str, timeout: float = 300) -> None:
+    """Poll until ``app`` has left the model.
+
+    ``remove-application --no-wait`` returns while the app is still dying.
+    Status failures and an error status are ignored; only absence counts.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            if app not in juju.status().apps:
+                return
+        except Exception:
+            logger.warning("status failed while waiting for %s to leave", app, exc_info=True)
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{app} still present {timeout:.0f}s after removal")
+        time.sleep(5)
 
 
 @pytest.fixture(scope="class")
@@ -168,6 +225,9 @@ def cmr_setup(juju: jubilant.Juju, charm_path, oci_image):
         "--destroy-storage",
         include_model=False,
     )
+    # The forced-removal test removes its offerer with --no-wait. Re-check
+    # here so a unit still dying cannot fail the next test.
+    _wait_until_app_gone(juju, OFFERER)
     # If a CMR test left the shared unit in error, fail that test here
     # rather than letting the next test inherit the broken unit.
     juju.wait(
@@ -308,16 +368,15 @@ class TestCMR:
             _wait_for_offerer_relation(env.model_a, OFFERER)
 
             _remove_offer(env.model_a, env.model_a_name, OFFERER, force=True)
+            # Hooks can still be queued after the offer is gone. Read the
+            # ledger first, then require the unit to stay active.
+            _await_remote_lifecycle_events(env.model_a, OFFERER, timeout=120)
             env.model_a.wait(
                 lambda status: jubilant.all_active(status, OFFERER),
                 error=lambda status: jubilant.any_error(status, OFFERER),
+                successes=3,
                 timeout=300,
             )
-            status = env.model_a.status()
-            unit = status.apps[OFFERER].units[f"{OFFERER}/0"]
-            assert unit.workload_status.current == "active"
-            events = _remote_lifecycle_events(env.model_a, OFFERER)
-            assert events, "expected relation-departed or relation-broken for the remote app"
 
             env.juju_b.wait(
                 lambda status: jubilant.all_active(status, APP),
@@ -337,5 +396,6 @@ class TestCMR:
                     "--no-wait",
                     "--no-prompt",
                 )
+            _wait_until_app_gone(env.model_a, OFFERER)
             with contextlib.suppress(jubilant.CLIError):
                 env.juju_b.cli("remove-saas", "remote-offerer")
