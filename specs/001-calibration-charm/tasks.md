@@ -345,7 +345,11 @@
 - [X] T068 [US19] Verify CMR compatibility in `src/charm.py`: no same-model assumptions, remote app name in event ledger
 - [X] T069 [US19] Add CMR unit tests in `tests/unit/test_charm.py`: verify relation handlers work with remote app from different model context
 
-**Checkpoint**: US19 complete — cross-model relation support verified
+**Checkpoint**: US19 complete — cross-model relation support verified. Forced
+`remove-offer --force` is covered by `test_cmr_forced_offer_removal_recovers`
+in `tests/integration/test_cmr.py` (not a smoke test): a dedicated
+`norma-cmr-offerer` must return to active, and its event ledger must show
+relation-departed or relation-broken for the remote app.
 
 ---
 
