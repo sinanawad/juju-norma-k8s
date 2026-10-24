@@ -271,11 +271,12 @@ class NormaK8sCharm(ops.CharmBase):
                         pass
                     except ops.ModelError as e:
                         # SecretNotFoundError is a ModelError subclass and
-                        # must stay the first handler.
+                        # must stay the first handler. Log the type only:
+                        # ModelError text can contain the secret URI.
                         logger.warning(
                             "secret revoke failed for relation %d: %s",
                             event.relation.id,
-                            e,
+                            type(e).__name__,
                         )
 
         # Update relation data first — independent of workload readiness
@@ -1441,8 +1442,8 @@ class NormaK8sCharm(ops.CharmBase):
         # Grant secret access to live calibration-provider relations.
         # An empty unit set means the relation is dying or not yet joined:
         # ops exposes no relation life. One ModelError must not stop grants
-        # to the other relations, and must not fail the hook. Never log the
-        # secret id or its content.
+        # to the other relations, and must not fail the hook. Log the
+        # exception type only: the message can contain the secret URI.
         if peer and self.unit.is_leader():
             secret_id = peer.data[self.app].get("secret-id")
             if secret_id:
@@ -1460,7 +1461,7 @@ class NormaK8sCharm(ops.CharmBase):
                             logger.warning(
                                 "secret grant failed for relation %d: %s",
                                 rel.id,
-                                e,
+                                type(e).__name__,
                             )
 
         for endpoint in ("calibration-provider", "calibration-requirer"):

@@ -2133,10 +2133,10 @@ class TestSecurity:
         assert ctx.action_results["workload-gid"] == "unavailable"
 
 
-# Juju 4.0 secret-grant fails with this ModelError when the remote app has
-# already gone ("expected only 1 subject, got 0"). The grant is queued and
-# may instead fail later, at hook commit, which Python cannot catch.
-_GRANT_SUBJECT_ERROR = "expected only 1 subject, got 0"
+# Juju 4.0 secret-grant fails when the remote app has already gone. The
+# grant is queued and may instead fail later, at hook commit, which Python
+# cannot catch. The fake message embeds the secret id the way a real
+# ModelError does, so a log of str(e) fails the caplog assertion.
 _CMR_REMOTE_APP = "remote-0123abcd"
 _CMR_REMOTE_MODEL = "11111111-2222-4333-8444-555555555555"
 
@@ -2172,6 +2172,16 @@ def _leader_with_secret(*relations: ops.testing.RelationBase) -> ops.testing.Sta
     )
 
 
+def _caplog_text(caplog: pytest.LogCaptureFixture) -> str:
+    """Every captured message, including exception text attached to a record."""
+    parts: list[str] = []
+    for record in caplog.records:
+        parts.append(record.getMessage())
+        if record.exc_text:
+            parts.append(record.exc_text)
+    return "\n".join(parts)
+
+
 def _patch_secret_call(monkeypatch: pytest.MonkeyPatch, name: str, fail_for: set[int] | None):
     """Record secret_grant/secret_revoke calls and raise ModelError for some.
 
@@ -2184,7 +2194,7 @@ def _patch_secret_call(monkeypatch: pytest.MonkeyPatch, name: str, fail_for: set
     def fake(self, secret_id: str, relation_id: int, *, unit: str | None = None):
         calls.append(relation_id)
         if fail_for is None or relation_id in fail_for:
-            raise ops.ModelError(_GRANT_SUBJECT_ERROR)
+            raise ops.ModelError(f'secret "{secret_id}" not found')
         return original(self, secret_id, relation_id, unit=unit)
 
     monkeypatch.setattr(scenario.mocking._MockModelBackend, name, fake)
@@ -2267,7 +2277,7 @@ class TestCMR:
             record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
         ]
         assert any(f"relation {bad.id}" in message for message in warnings)
-        assert all(secret_id not in message for message in warnings)
+        assert secret_id not in _caplog_text(caplog)
 
     def test_cmr_broken_revoke_error_stays_active(self, monkeypatch, caplog):
         """A ModelError from secret-revoke on relation-broken is logged and the hook succeeds."""
@@ -2275,13 +2285,16 @@ class TestCMR:
         revokes = _patch_secret_call(monkeypatch, "secret_revoke", fail_for=None)
         rel = _cmr_relation(id=1)
         ctx = ops.testing.Context(NormaK8sCharm)
-        out = ctx.run(ctx.on.relation_broken(rel), _leader_with_secret(rel))
+        state = _leader_with_secret(rel)
+        secret_id = state.get_secret(label="calibration-password").id
+        out = ctx.run(ctx.on.relation_broken(rel), state)
         assert rel.id in revokes
         assert out.unit_status == ops.ActiveStatus()
         warnings = [
             record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
         ]
         assert any(f"relation {rel.id}" in message for message in warnings)
+        assert secret_id not in _caplog_text(caplog)
 
     def test_cmr_joined_still_grants(self):
         """relation-joined on a live CMR relation still grants the secret."""
