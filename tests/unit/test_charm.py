@@ -2303,6 +2303,21 @@ class TestCMR:
         out = ctx.run(ctx.on.relation_joined(rel, remote_unit=0), _leader_with_secret(rel))
         assert rel.id in out.get_secret(label="calibration-password").remote_grants
 
+    def test_relation_changed_grants(self):
+        """relation-changed on a joined CMR relation grants the secret."""
+        rel = _cmr_relation()
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_changed(rel), _leader_with_secret(rel))
+        assert rel.id in out.get_secret(label="calibration-password").remote_grants
+
+    def test_relation_created_does_not_grant(self):
+        """relation-created has no remote units yet, so the secret is not granted."""
+        rel = _cmr_relation(remote_units_data={})
+        ctx = ops.testing.Context(NormaK8sCharm)
+        out = ctx.run(ctx.on.relation_created(rel), _leader_with_secret(rel))
+        granted = out.get_secret(label="calibration-password").remote_grants
+        assert rel.id not in granted
+
     def test_dead_relation_not_granted(self, monkeypatch):
         """A relation whose relation-list is not-found (active=False) is not granted."""
         dead = _cmr_relation(id=7, remote_app_name="remote-deaddead")
