@@ -13,6 +13,7 @@ import dataclasses
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 
@@ -22,6 +23,7 @@ import pytest
 from .conftest import (
     CLOUD_DEFAULT,
     CONTROLLER_DEFAULT,
+    JUJU_4,
     MODEL_LOGGING_CONFIG,
     _deploy_with_retry,
     _env,
@@ -30,7 +32,12 @@ from .conftest import (
 
 APP = "juju-norma-k8s"
 OFFERER = "norma-cmr-offerer"
+_ENDPOINT = "calibration-provider"
 logger = logging.getLogger(__name__)
+
+
+class OfferNotFoundError(Exception):
+    """``juju offers`` has no offer for the requested application."""
 
 
 @dataclasses.dataclass
@@ -66,26 +73,79 @@ def _offer_connections(offers: dict) -> int:
     return total
 
 
-def _offer_exists(offers: dict, app: str) -> bool:
+def _offer_name(raw: str) -> str:
+    """Offer name from a ``juju offers`` key or offer URL.
+
+    ``admin/model.offer`` and ``model.offer`` both yield ``offer``.
+    """
+    tail = str(raw).rsplit("/", 1)[-1]
+    if "." in tail:
+        return tail.rsplit(".", 1)[-1]
+    return tail
+
+
+def _offer_for_app(offers: dict, app: str) -> tuple[str, dict] | None:
+    """Return the offers entry for ``app``, preferring the calibration endpoint."""
+    matches: list[tuple[str, dict]] = []
     for name, info in offers.items():
-        if name == app:
-            return True
         if not isinstance(info, dict):
             continue
-        if info.get("application") == app or app in str(info.get("offer-url", "")):
-            return True
-    return False
+        if info.get("application") == app or _offer_name(name) == app:
+            matches.append((str(name), info))
+    if not matches:
+        return None
+    for name, info in matches:
+        endpoints = info.get("endpoints")
+        if isinstance(endpoints, dict) and _ENDPOINT in endpoints:
+            return name, info
+    return matches[0]
 
 
-def _remove_offer(juju: jubilant.Juju, model_name: str, app: str, *, force: bool) -> None:
+def _offer_target(name: str, info: dict, model_name: str) -> str:
+    """Offer URL or ``<model>.<offer-name>`` for show-offer, consume, and remove-offer.
+
+    ``juju offer`` takes ``<model>.<app>:<endpoint>``. ``remove-offer`` does not:
+    it takes the offer URL (``admin/<model>.<offer>`` or ``<model>.<offer>``).
+    """
+    url = str(info.get("offer-url") or "").strip()
+    if url:
+        return url
+    if "/" in name:
+        return name
+    if "." in name:
+        return name
+    return f"{model_name}.{_offer_name(name)}"
+
+
+def _offer_exists(offers: dict, app: str) -> bool:
+    return _offer_for_app(offers, app) is not None
+
+
+def _read_offer_target(juju: jubilant.Juju, app: str, model_name: str) -> str:
+    """Read the offer URL back from ``juju offers``."""
+    found = _offer_for_app(_load_offers(juju), app)
+    if found is None:
+        raise OfferNotFoundError(app)
+    name, info = found
+    return _offer_target(name, info, model_name)
+
+
+def _remove_offer_url(juju: jubilant.Juju, offer_url: str, *, force: bool) -> None:
     """Remove an offer. ``--yes`` skips the 3.6 and 4.0 confirmation prompt.
 
     The rename of that flag to ``--no-prompt`` is a Juju 4.1 change.
+    ``offer_url`` is the offer URL or ``<model>.<offer-name>``, not
+    ``<model>.<app>:<endpoint>``.
     """
-    args = ["remove-offer", f"{model_name}.{app}:calibration-provider", "--yes"]
+    args = ["remove-offer", offer_url, "--yes"]
     if force:
         args.append("--force")
     juju.cli(*args, include_model=False)
+
+
+def _remove_offer(juju: jubilant.Juju, model_name: str, app: str, *, force: bool) -> None:
+    """Remove whatever offer ``juju offers`` currently has for ``app``."""
+    _remove_offer_url(juju, _read_offer_target(juju, app, model_name), force=force)
 
 
 def _remote_lifecycle_events(juju: jubilant.Juju, app: str) -> list[dict]:
@@ -101,6 +161,31 @@ def _remote_lifecycle_events(juju: jubilant.Juju, app: str) -> list[dict]:
     ]
 
 
+def _error_summary(juju: jubilant.Juju, app: str) -> str | None:
+    """Workload text when ``app`` is in error, otherwise None.
+
+    A status failure is not treated as error: the caller keeps polling.
+    """
+    try:
+        status = juju.status()
+    except Exception:
+        logger.warning("status failed while polling %s", app, exc_info=True)
+        return None
+    if not jubilant.any_error(status, app) or app not in status.apps:
+        return None
+    app_status = status.apps[app]
+    parts = [f"app={app_status.app_status.current}: {app_status.app_status.message}"]
+    for unit_name, unit in app_status.units.items():
+        parts.append(f"{unit_name}={unit.workload_status.current}: {unit.workload_status.message}")
+    return "; ".join(parts)
+
+
+def _raise_if_in_error(juju: jubilant.Juju, app: str, reason: str) -> None:
+    summary = _error_summary(juju, app)
+    if summary is not None:
+        raise AssertionError(f"{app} is in error {reason}: {summary}")
+
+
 def _await_remote_lifecycle_events(
     juju: jubilant.Juju, app: str, timeout: float = 120
 ) -> list[dict]:
@@ -108,21 +193,49 @@ def _await_remote_lifecycle_events(
 
     ``all_active`` can succeed before relation-departed or relation-broken
     has run. A failed ``get-event-log`` while that hook is in progress is
-    retried until the timeout.
+    retried until the timeout. An offerer already in error fails immediately.
     """
     deadline = time.monotonic() + timeout
     while True:
         try:
             events = _remote_lifecycle_events(juju, app)
-        except Exception:
+        except Exception as exc:
+            summary = _error_summary(juju, app)
+            if summary is not None:
+                raise AssertionError(
+                    f"{app} is in error while reading the event log: {summary}"
+                ) from exc
             logger.warning("event log not readable yet on %s", app, exc_info=True)
             events = []
         if events:
             return events
+        _raise_if_in_error(juju, app, "while waiting for a departure hook")
         if time.monotonic() > deadline:
             raise AssertionError(
                 f"expected relation-departed or relation-broken for the remote app on {app}"
             )
+        time.sleep(5)
+
+
+def _wait_until_provider_relation_gone(
+    juju: jubilant.Juju, app: str, timeout: float = 300
+) -> None:
+    """Poll until ``calibration-provider`` is gone. An error unit fails immediately."""
+    deadline = time.monotonic() + timeout
+    relations: dict = {}
+    while True:
+        try:
+            status = juju.status()
+        except Exception:
+            logger.warning("status failed while waiting for %s relation", app, exc_info=True)
+            status = None
+        if status is not None and app in status.apps:
+            _raise_if_in_error(juju, app, "before the offer relation departed")
+            relations = status.apps[app].relations
+            if not (relations.get(_ENDPOINT) or []):
+                return
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{_ENDPOINT} relation still present on {app}: {relations!r}")
         time.sleep(5)
 
 
@@ -216,7 +329,7 @@ def cmr_setup(juju: jubilant.Juju, charm_path, oci_image):
         logger.warning("could not list offers during CMR teardown", exc_info=True)
         exists = True
     if exists:
-        with contextlib.suppress(jubilant.CLIError):
+        with contextlib.suppress(jubilant.CLIError, OfferNotFoundError):
             _remove_offer(juju, model_a_name, APP, force=True)
     no_model.cli(
         "destroy-model",
@@ -226,8 +339,14 @@ def cmr_setup(juju: jubilant.Juju, charm_path, oci_image):
         include_model=False,
     )
     # The forced-removal test removes its offerer with --no-wait. Re-check
-    # here so a unit still dying cannot fail the next test.
-    _wait_until_app_gone(juju, OFFERER)
+    # here so a unit still dying cannot fail the next test. A failure to
+    # observe that departure must not skip the shared-app check below.
+    gone_error: Exception | None = None
+    try:
+        _wait_until_app_gone(juju, OFFERER)
+    except Exception as exc:
+        logger.warning("offerer still present during CMR teardown", exc_info=True)
+        gone_error = exc
     # If a CMR test left the shared unit in error, fail that test here
     # rather than letting the next test inherit the broken unit.
     juju.wait(
@@ -235,31 +354,38 @@ def cmr_setup(juju: jubilant.Juju, charm_path, oci_image):
         error=lambda status: jubilant.any_error(status, APP),
         timeout=300,
     )
+    if gone_error is not None:
+        raise gone_error
 
 
 class TestCMR:
     """US19: Cross-model relation offer/consume cycle."""
 
-    def _offer(self, env: CmrEnv) -> None:
-        """Create a CMR offer from model A's calibration-provider."""
+    def _create_offer(self, env: CmrEnv, app: str) -> str:
+        """Offer ``app``'s calibration-provider and return the offer URL.
+
+        The offer command takes ``<model>.<app>:<endpoint>``. The URL comes
+        back from ``juju offers``, which is what consume and remove-offer take.
+        """
         env.model_a.cli(
             "offer",
-            f"{env.model_a_name}.{APP}:calibration-provider",
+            f"{env.model_a_name}.{app}:{_ENDPOINT}",
             include_model=False,
         )
+        return _read_offer_target(env.model_a, app, env.model_a_name)
 
-    def _consume_and_integrate(self, env: CmrEnv) -> None:
-        """Consume the offer in model B and integrate."""
+    def _consume_and_integrate(self, env: CmrEnv, offer_url: str, alias: str) -> None:
+        """Consume ``offer_url`` in model B under ``alias`` and integrate."""
         # Use an alias — model B already has a local app with the same name.
         env.juju_b.cli(
             "consume",
-            f"{env.model_a_name}.{APP}",
-            "remote-norma",
+            offer_url,
+            alias,
             include_model=False,
         )
         env.juju_b.cli(
             "integrate",
-            "remote-norma:calibration-provider",
+            f"{alias}:{_ENDPOINT}",
             f"{APP}:calibration-requirer",
         )
 
@@ -272,16 +398,12 @@ class TestCMR:
         """
         env = cmr_setup
         # US19 offer: create + verify via show-offer.
-        self._offer(env)
-        result = env.model_a.cli(
-            "show-offer",
-            f"{env.model_a_name}.{APP}",
-            include_model=False,
-        )
+        offer_url = self._create_offer(env, APP)
+        result = env.model_a.cli("show-offer", offer_url, include_model=False)
         assert "calibration-provider" in result
 
         # Consume + integrate from model B; verify the relation exists.
-        self._consume_and_integrate(env)
+        self._consume_and_integrate(env, offer_url, "remote-norma")
         env.juju_b.wait(jubilant.all_active, timeout=120)
         status = env.juju_b.status()
         app_relations = status.apps[APP].relations
@@ -306,7 +428,7 @@ class TestCMR:
         while True:
             status = env.model_a.status()
             relations = status.apps[APP].relations
-            provider_gone = not (relations.get("calibration-provider") or [])
+            provider_gone = not (relations.get(_ENDPOINT) or [])
             offers = _load_offers(env.model_a)
             if provider_gone and _offer_connections(offers) == 0:
                 break
@@ -322,7 +444,7 @@ class TestCMR:
         )
 
         env.juju_b.cli("remove-saas", "remote-norma")
-        _remove_offer(env.model_a, env.model_a_name, APP, force=False)
+        _remove_offer_url(env.model_a, offer_url, force=False)
 
         status = env.model_a.status()
         unit = status.apps[APP].units[f"{APP}/0"]
@@ -338,10 +460,12 @@ class TestCMR:
 
         The offerer is a separate application. A regression here must not wedge
         the shared ``juju-norma-k8s`` app that the rest of the suite uses.
-        On 3.6 the hook sequence can differ, so either relation-departed or
+        On 4.0 the calibration-provider relation must disappear. On 3.6 the
+        hook sequence can differ, so either relation-departed or
         relation-broken for the remote app is enough.
         """
         env = cmr_setup
+        offer_url: str | None = None
         try:
             _deploy_with_retry(env.model_a, str(charm_path), oci_image, app=OFFERER)
             env.model_a.wait(
@@ -349,28 +473,18 @@ class TestCMR:
                 error=lambda status: jubilant.any_error(status, OFFERER),
                 timeout=300,
             )
-            env.model_a.cli(
-                "offer",
-                f"{env.model_a_name}.{OFFERER}:calibration-provider",
-                include_model=False,
-            )
-            env.juju_b.cli(
-                "consume",
-                f"{env.model_a_name}.{OFFERER}",
-                "remote-offerer",
-                include_model=False,
-            )
-            env.juju_b.cli(
-                "integrate",
-                "remote-offerer:calibration-provider",
-                f"{APP}:calibration-requirer",
-            )
+            offer_url = self._create_offer(env, OFFERER)
+            self._consume_and_integrate(env, offer_url, "remote-offerer")
             _wait_for_offerer_relation(env.model_a, OFFERER)
 
-            _remove_offer(env.model_a, env.model_a_name, OFFERER, force=True)
-            # Hooks can still be queued after the offer is gone. Read the
-            # ledger first, then require the unit to stay active.
-            _await_remote_lifecycle_events(env.model_a, OFFERER, timeout=120)
+            _remove_offer_url(env.model_a, offer_url, force=True)
+            # Hooks can still be queued after the offer is gone. On 4.0 the
+            # relation itself must leave; 3.6 may only record one of the two
+            # departure hooks. Then require the unit to stay active.
+            if JUJU_4:
+                _wait_until_provider_relation_gone(env.model_a, OFFERER)
+            else:
+                _await_remote_lifecycle_events(env.model_a, OFFERER, timeout=120)
             env.model_a.wait(
                 lambda status: jubilant.all_active(status, OFFERER),
                 error=lambda status: jubilant.any_error(status, OFFERER),
@@ -386,8 +500,13 @@ class TestCMR:
         finally:
             # Drop the offer first when the test failed before remove-offer,
             # or remove-application can stall on a still-consumed offer.
-            with contextlib.suppress(jubilant.CLIError):
-                _remove_offer(env.model_a, env.model_a_name, OFFERER, force=True)
+            # remove-saas runs before the gone-wait so a slow removal cannot
+            # skip it or replace the test's own exception.
+            with contextlib.suppress(jubilant.CLIError, OfferNotFoundError):
+                if offer_url is not None:
+                    _remove_offer_url(env.model_a, offer_url, force=True)
+                else:
+                    _remove_offer(env.model_a, env.model_a_name, OFFERER, force=True)
             with contextlib.suppress(jubilant.CLIError):
                 env.model_a.cli(
                     "remove-application",
@@ -396,6 +515,15 @@ class TestCMR:
                     "--no-wait",
                     "--no-prompt",
                 )
-            _wait_until_app_gone(env.model_a, OFFERER)
             with contextlib.suppress(jubilant.CLIError):
                 env.juju_b.cli("remove-saas", "remote-offerer")
+            pending = sys.exc_info()[1]
+            try:
+                _wait_until_app_gone(env.model_a, OFFERER)
+            except Exception:
+                if pending is None:
+                    raise
+                logger.warning(
+                    "offerer still present after the test failed",
+                    exc_info=True,
+                )
