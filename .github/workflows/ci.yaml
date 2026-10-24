@@ -267,23 +267,27 @@ jobs:
           if-no-files-found: error
       # Same model loop as dump_debug_logs. || true throughout: this step exists
       # to salvage logs, and must not replace the integration failure.
+      # ci-fallback/ is separate so a 120s timeout cannot replace the dumps
+      # pytest already wrote into juju-debug-logs/.
       - name: Dump juju debug logs
         if: failure()
         timeout-minutes: 10
         run: |
           set +e
           dest="${{ github.workspace }}/juju-debug-logs"
-          mkdir -p "$dest" || true
+          fallback="${dest}/ci-fallback"
+          mkdir -p "$fallback" || true
           cli="${JUJU_CLI:-juju}"
           ctrl="${JUJU_CONTROLLER:-microk8s-localhost}"
-          # One physical line: a multiline python -c string would include this
-          # step's YAML indent and fail with IndentationError.
-          py='import json,sys; raw=sys.stdin.read(); data={}; exec("try:\n data=json.loads(raw) if raw.strip() else {}\nexcept Exception:\n data={}"); entries=(data.get("models") or []) if isinstance(data, dict) else []; names=[]; [names.append(n) for e in entries if isinstance(e, dict) for n in [str((e.get("short-name") or e.get("name") or "")).rsplit("/", 1)[-1]] if n and n not in names]; print("\n".join(names if "controller" in names else names+["controller"]))'
-          models=$("$cli" models -c "$ctrl" --format json | python3 -c "$py" || true)
+          models=$("$cli" models -c "$ctrl" --format json | jq -r '.models[] | (."short-name" // .name) | split("/")[-1]' || true)
+          # `juju models` omits the controller model. dump_debug_logs includes it.
+          if ! printf '%s\n' "$models" | grep -qx controller; then
+            models=$(printf '%s\ncontroller\n' "$models")
+          fi
           printf '%s\n' "$models" | while IFS= read -r model; do
             [ -n "$model" ] || continue
             timeout 120 "$cli" debug-log -m "${ctrl}:${model}" --replay --no-tail --level DEBUG \
-              > "${dest}/${model}.log" 2>&1 || true
+              > "${fallback}/${model}.log" 2>&1 || true
           done
           exit 0
       - name: Upload juju debug logs
