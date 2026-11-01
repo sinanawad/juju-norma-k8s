@@ -50,7 +50,7 @@ jobs:
       - run: make unit
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-report
           path: .coverage
@@ -135,7 +135,7 @@ jobs:
           rm charmcraft-principal.yaml.bak
           mv principal.charm juju-norma-k8s_amd64.charm
       - name: Upload charm artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: charm
           path: "*.charm"
@@ -158,7 +158,7 @@ jobs:
       - name: Build ROCK (amd64 only)
         run: rockcraft pack --platform amd64
       - name: Upload ROCK artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rock
           path: "*.rock"
@@ -258,7 +258,7 @@ jobs:
           echo "debug_name=juju-debug-log-${slug}" >> "$GITHUB_OUTPUT"
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ steps.report.outputs.name }}
           path: report.xml
@@ -292,7 +292,7 @@ jobs:
           exit 0
       - name: Upload juju debug logs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ steps.report.outputs.debug_name }}
           path: juju-debug-logs/
