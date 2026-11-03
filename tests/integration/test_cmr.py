@@ -322,18 +322,28 @@ def _provider_has_remote_unit(relations: str) -> bool:
     return any(isinstance(rel, dict) and rel.get("remote-units") for rel in providers)
 
 
-def _wait_for_offerer_relation(juju: jubilant.Juju, app: str) -> None:
-    """Poll introspect until the provider relation has a remote unit."""
+def _wait_for_offerer_relation(juju: jubilant.Juju, app: str, timeout: float = 300) -> None:
+    """Poll introspect until the provider relation has a remote unit.
+
+    CMR propagation after consume + integrate can take minutes on Juju 3.6.
+    A failed introspect run is retried until the timeout.
+    """
+    deadline = time.monotonic() + timeout
     relations = ""
-    for _ in range(18):  # ~90s
-        task = juju.run(f"{app}/leader", "introspect", params={"sections": "relations"})
-        relations = task.results.get("relations", "") if task.success else ""
+    while True:
+        try:
+            task = juju.run(f"{app}/leader", "introspect", params={"sections": "relations"})
+            relations = task.results.get("relations", "")
+        except Exception:
+            logger.warning("introspect failed while waiting for %s relation", app, exc_info=True)
         if _provider_has_remote_unit(relations):
             return
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"calibration-provider relation with a remote unit did not propagate to "
+                f"{app} within {timeout:.0f}s: {relations}"
+            )
         time.sleep(5)
-    raise AssertionError(
-        f"calibration-provider relation with a remote unit did not propagate to {app}: {relations}"
-    )
 
 
 def _wait_until_app_gone(juju: jubilant.Juju, app: str, timeout: float = 300) -> None:
